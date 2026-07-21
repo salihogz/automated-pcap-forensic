@@ -75,7 +75,7 @@ def main() -> int:
         return 1
 
     try:
-        logger.info(f"Hedef dosya: {target_path}")
+        logger.info("Hedef dosya: %s", target_path)
         start_time = perf_counter()
         
         pcap_parser = PCAPParser(target_path)
