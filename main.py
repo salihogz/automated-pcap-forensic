@@ -46,15 +46,18 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def resolve_target_path(args: argparse.Namespace) -> Optional[Path]:
-    """Hedef pcap dosyasını -f parametresinden ya da samples/ dizininden belirler."""
+    """Hedef pcap dosyasını -f parametresinden ya da samples/ dizininden (alt klasörler dahil) belirler."""
     if args.file:
         if not args.file.exists():
             logger.error(f"Belirtilen dosya bulunamadı: {args.file}")
             return None
         return args.file
 
+    # rglob kullanılıyor çünkü örnek dosyalar samples/clean/ ve
+    # samples/malicious/ alt klasörlerinde tutuluyor; glob() sadece
+    # kök dizine baktığı için bu dosyaları göremezdi.
     sample_files = sorted(
-        f for ext in config.SUPPORTED_EXTENSIONS for f in config.SAMPLES_DIR.glob(f"*{ext}")
+        f for ext in config.SUPPORTED_EXTENSIONS for f in config.SAMPLES_DIR.rglob(f"*{ext}")
     )
     if not sample_files:
         logger.error("Lütfen bir PCAP dosyası belirtin!")

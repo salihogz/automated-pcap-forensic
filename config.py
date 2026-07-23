@@ -9,7 +9,15 @@ REPORTS_DIR = BASE_DIR / "reports"
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 LOGS_DIR = BASE_DIR / "logs"
+# ==========================
+# General Statistics
+# ==========================
 
+TOP_N_TALKERS = 10
+TOP_N_IPS = 10
+TOP_N_PORTS = 10
+
+TIMELINE_BUCKET_SECONDS = 1
 for directory in (SAMPLES_DIR, REPORTS_DIR, TEMPLATES_DIR, STATIC_DIR, LOGS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
