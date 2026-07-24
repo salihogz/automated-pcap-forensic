@@ -1,18 +1,16 @@
 """
 Automated PCAP Forensic Analysis Tool - CLI Entry Point
 """
-import sys
-import logging
 import argparse
+import logging
+import sys
 from pathlib import Path
 from time import perf_counter
-from typing import Optional
 
 import config
 from modules.parser import PCAPParser
 
 logger = logging.getLogger(__name__)
-
 
 def setup_logging(verbose: bool = False) -> None:
     """Merkezi loglama yapılandırmasını başlatır."""
@@ -45,7 +43,7 @@ def parse_arguments() -> argparse.Namespace:
     return arg_parser.parse_args()
 
 
-def resolve_target_path(args: argparse.Namespace) -> Optional[Path]:
+def resolve_target_path(args: argparse.Namespace) -> Path | None:
     """Hedef pcap dosyasını -f parametresinden ya da samples/ dizininden (alt klasörler dahil) belirler."""
     if args.file:
         if not args.file.exists():

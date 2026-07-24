@@ -48,7 +48,7 @@ def test_top_bandwidth_hosts_counts_bytes_not_packets():
     assert top_bytes == 1000
 
 
-def test_tcp_ports_counts_both_src_and_dst():
+def test_udp_ports_counts_both_src_and_dst():
     # DNS-benzeri senaryo: kaynak port 53 (yanıt), hedef port yüksek port
     packets = [
         _make_packet(1.0, "8.8.8.8", "10.0.0.5", 100,

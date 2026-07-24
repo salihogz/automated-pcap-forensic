@@ -3,29 +3,77 @@
 Automated PCAP Forensic Analysis Tool - Data Models
 Proje genelinde kullanılan veri yapılarını (Dataclass) barındırır.
 """
-from collections import Counter
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Optional, Tuple
+from enum import Enum
+from typing import Any
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PacketInfo:
     """
     Ayrıştırılan her bir paketi temsil eden immutable veri sınıfı.
-    `slots=True` kullanımı bellek tüketimini minimize eder.
+
+    `slots=True` bellek tüketimini azaltır.
+    `frozen=True` ise paket oluşturulduktan sonra alanlarının
+    değiştirilememesini garanti eder (adli veri bütünlüğü/chain of custody
+    açısından önemlidir).
     """
     id: int
     epoch_time: float
-    src_ip: Optional[str]
-    dst_ip: Optional[str]
+    src_ip: str | None
+    dst_ip: str | None
     is_ipv6: bool
     network_protocol: str                  # IPv4 / IPv6 / ARP / OTHER
-    transport_protocol: Optional[str]       # TCP / UDP / ICMP / None
-    application_protocol: Optional[str]     # DNS / HTTP / TLS / DHCP / SSH / FTP / NTP / SNMP / None
+    transport_protocol: str | None       # TCP / UDP / ICMP / None
+    application_protocol: str | None     # DNS / HTTP / TLS / DHCP / SSH / FTP / NTP / SNMP / None
     length: int
-    src_port: Optional[int]
-    dst_port: Optional[int]
-    tcp_flags: Optional[str]
+    src_port: int | None
+    dst_port: int | None
+    tcp_flags: str | None
+
+    def to_dict(self) -> dict:
+        """Nesneyi dictionary yapısına dönüştürür (Raporlama ve Jinja2 için)."""
+        return asdict(self)
+
+
+class ThreatSeverity(str, Enum):
+    """
+    Tehdit seviyelerini belirten Enum sınıfı.
+    str kalıtımı sayesinde JSON/HTML serileştirmede kolaylık sağlar.
+    """
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    INFO = "INFO"
+
+
+@dataclass(frozen=True, slots=True)
+class ThreatFinding:
+    """
+    Tehdit tespit motoru tarafından üretilen tekil bulguyu temsil eder.
+
+    frozen=True: Bir bulgu üretildikten sonra değiştirilemez
+    (chain of custody / veri bütünlüğü).
+
+    Attributes:
+        rule_id: Kuralın benzersiz kimliği (Örn: SEC-RULE-001).
+        title: Tehdidin kısa başlığı.
+        severity: Tehdit önem derecesi (ThreatSeverity Enum).
+        description: Detaylı açıklama ve adli analiz notu.
+        evidence: Kurala özel kanıt verileri (Örn: taranan port sayısı, domain listesi).
+        source: Tehdit kaynağı olan IP/Host.
+        destination: Hedef IP/Host (Opsiyonel).
+        timestamp: Tespiti tetikleyen ilk veya son olayın epoch zamanı.
+    """
+    rule_id: str
+    title: str
+    severity: ThreatSeverity
+    description: str
+    evidence: dict[str, Any]
+    source: str
+    destination: str | None = None
+    timestamp: float | None = None
 
     def to_dict(self) -> dict:
         """Nesneyi dictionary yapısına dönüştürür (Raporlama ve Jinja2 için)."""
@@ -37,22 +85,33 @@ class GeneralStatistics:
     """
     General Statistics modülünün ürettiği özet istatistikleri temsil eder.
     Threat Detector ve Reporter modülleri bu veriyi tüketir.
+
+    NOT: Dağılım alanları (protocol_distribution vb.) bilinçli olarak
+    `dict[str, int]` tipindedir, `Counter[str]` DEĞİL. statistics.py bu
+    alanları hesaplarken Counter kullanabilir, ama dataclass'a atarken
+    `dict(counter)` ile sade dict'e çevirmelidir. Aksi halde
+    `dataclasses.asdict()` (to_dict / Jinja2 raporlama) Counter'ı
+    yanlış yeniden inşa eder ve veriyi bozar.
     """
     total_packets: int
     total_bytes: int
-    first_packet_time: Optional[float]
-    last_packet_time: Optional[float]
+    first_packet_time: float | None
+    last_packet_time: float | None
     capture_duration: float
 
-    protocol_distribution: Counter
-    network_protocol_distribution: Counter
-    transport_protocol_distribution: Counter
-    application_protocol_distribution: Counter
+    protocol_distribution: dict[str, int]
+    network_protocol_distribution: dict[str, int]
+    transport_protocol_distribution: dict[str, int]
+    application_protocol_distribution: dict[str, int]
 
-    top_bandwidth_hosts: List[Tuple[str, int]]
-    top_source_ips: List[Tuple[str, int]]
-    top_destination_ips: List[Tuple[str, int]]
-    top_tcp_ports: List[Tuple[int, int]]
-    top_udp_ports: List[Tuple[int, int]]
+    top_bandwidth_hosts: list[tuple[str, int]]
+    top_source_ips: list[tuple[str, int]]
+    top_destination_ips: list[tuple[str, int]]
+    top_tcp_ports: list[tuple[int, int]]
+    top_udp_ports: list[tuple[int, int]]
 
-    timeline: Dict[float, int]
+    timeline: dict[float, int]
+
+    def to_dict(self) -> dict:
+        """Nesneyi dictionary yapısına dönüştürür (Raporlama ve Jinja2 için)."""
+        return asdict(self)

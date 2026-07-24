@@ -6,10 +6,9 @@ PcapReader akış mimarisi, UTC epoch zaman damgası ve Dataclass veri yapısı 
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
 
 # Scapy standart katmanları
-from scapy.all import PcapReader, IP, IPv6, TCP, UDP, ICMP, ARP, DNS, DHCP, NTP, SNMP
+from scapy.all import ARP, DHCP, DNS, ICMP, IP, NTP, SNMP, TCP, UDP, IPv6, PcapReader
 from scapy.packet import Packet
 
 # TLS katmanını güvenli içe aktarma
@@ -17,6 +16,15 @@ try:
     from scapy.layers.tls.all import TLS
 except (ImportError, ModuleNotFoundError):
     TLS = None
+
+# HTTP katmanını güvenli içe aktarma (modül seviyesinde - performans için;
+# her paket için tekrar tekrar import edilmesin diye TLS ile aynı desen).
+try:
+    from scapy.layers.http import HTTP, HTTPRequest, HTTPResponse
+except (ImportError, ModuleNotFoundError):
+    HTTP = None
+    HTTPRequest = None
+    HTTPResponse = None
 
 import config
 from modules.models import PacketInfo
@@ -27,7 +35,7 @@ logger = logging.getLogger(__name__)
 class PCAPParser:
     """PCAP/PCAPNG dosyalarını çözerek PacketInfo nesnelerine dönüştüren kütüphane sınıfı."""
 
-    def __init__(self, file_path: Union[str, Path]):
+    def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
 
     def validate_file(self) -> None:
@@ -43,7 +51,7 @@ class PCAPParser:
             )
 
     @staticmethod
-    def _extract_network_layer(packet: Packet) -> Tuple[Optional[str], Optional[str], str, bool]:
+    def _extract_network_layer(packet: Packet) -> tuple[str | None, str | None, str, bool]:
         """(src_ip, dst_ip, network_protocol, is_ipv6) çıkarır."""
         ip_layer = packet.getlayer(IP)
         if ip_layer is not None:
@@ -61,10 +69,10 @@ class PCAPParser:
 
     @staticmethod
     def _extract_application_protocol(
-        packet: Packet, 
-        src_port: Optional[int], 
-        dst_port: Optional[int]
-    ) -> Optional[str]:
+        packet: Packet,
+        src_port: int | None,
+        dst_port: int | None
+    ) -> str | None:
         """Uygulama katmanı protokolünü tespit eder (Scapy katmanları ve port fallback)."""
         if packet.haslayer(DNS):
             return "DNS"
@@ -76,13 +84,10 @@ class PCAPParser:
             return "SNMP"
         if TLS is not None and packet.haslayer(TLS):
             return "TLS"
-
-        try:
-            from scapy.layers.http import HTTP, HTTPRequest, HTTPResponse
-            if packet.haslayer(HTTP) or packet.haslayer(HTTPRequest) or packet.haslayer(HTTPResponse):
-                return "HTTP"
-        except (ImportError, ModuleNotFoundError):
-            pass
+        if HTTP is not None and (
+            packet.haslayer(HTTP) or packet.haslayer(HTTPRequest) or packet.haslayer(HTTPResponse)
+        ):
+            return "HTTP"
 
         ports = {src_port, dst_port} - {None}
         if 53 in ports:
@@ -118,15 +123,15 @@ class PCAPParser:
         try:
             epoch_time = float(packet.time)
         except (ValueError, OverflowError, OSError, TypeError) as e:
-            logger.warning(f"Paket #{index} için hatalı timestamp atlandı: {e}")
+            logger.warning("Paket #%d için hatalı timestamp atlandı: %s", index, e)
             epoch_time = 0.0
 
         src_ip, dst_ip, network_protocol, is_ipv6 = self._extract_network_layer(packet)
 
-        transport_protocol: Optional[str] = None
-        src_port: Optional[int] = None
-        dst_port: Optional[int] = None
-        tcp_flags: Optional[str] = None
+        transport_protocol: str | None = None
+        src_port: int | None = None
+        dst_port: int | None = None
+        tcp_flags: str | None = None
 
         tcp_layer = packet.getlayer(TCP)
         if tcp_layer is not None:
@@ -162,11 +167,11 @@ class PCAPParser:
             tcp_flags=tcp_flags,
         )
 
-    def parse(self) -> List[PacketInfo]:
+    def parse(self) -> list[PacketInfo]:
         """PCAP dosyasını PcapReader ile akış halinde okur ve PacketInfo listesi döndürür."""
         self.validate_file()
-        logger.info(f"PCAP akış okuması başlatılıyor: {self.file_path.name}")
-        parsed_packets: List[PacketInfo] = []
+        logger.info("PCAP akış okuması başlatılıyor: %s", self.file_path.name)
+        parsed_packets: list[PacketInfo] = []
         packet_count = 0
         try:
             with PcapReader(str(self.file_path)) as reader:
@@ -175,10 +180,13 @@ class PCAPParser:
                     try:
                         parsed_packets.append(self._parse_single_packet(packet, packet_count))
                     except Exception as pkt_err:
-                        logger.warning(f"Paket #{packet_count} işlenirken hata oluştu, atlanıyor: {pkt_err}")
+                        logger.warning("Paket #%d işlenirken hata oluştu, atlanıyor: %s", packet_count, pkt_err)
         except Exception as stream_err:
-            logger.error(f"PCAP okuma akışı kritik hatayla kesildi: {stream_err}")
+            logger.error("PCAP okuma akışı kritik hatayla kesildi: %s", stream_err)
             raise RuntimeError(f"PCAP okuma hatası: {stream_err}") from stream_err
 
-        logger.info(f"Ayrıştırma başarıyla tamamlandı. Toplam {len(parsed_packets)} / {packet_count} paket işlendi.")
+        logger.info(
+            "Ayrıştırma başarıyla tamamlandı. Toplam %d / %d paket işlendi.",
+            len(parsed_packets), packet_count,
+        )
         return parsed_packets

@@ -26,3 +26,4 @@ scapy==2.7.0
 six==1.17.0
 termcolor==3.3.0
 urllib3==2.7.0
+pytest
