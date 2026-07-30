@@ -9,6 +9,7 @@ REPORTS_DIR = BASE_DIR / "reports"
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 LOGS_DIR = BASE_DIR / "logs"
+
 # ==========================
 # General Statistics
 # ==========================
@@ -16,6 +17,16 @@ LOGS_DIR = BASE_DIR / "logs"
 TOP_N_TALKERS = 10
 TOP_N_IPS = 10
 TOP_N_PORTS = 10
+
+# --------------------------------------------------------------------
+# Threat Detection: Port Scan
+# --------------------------------------------------------------------
+# Aynı kaynak IP'nin (src_ip), aynı hedef IP'ye (dst_ip),
+# belirtilen zaman penceresi içerisinde erişmeye çalıştığı benzersiz
+# hedef port sayısı bu eşiği aşarsa Port Scan olarak değerlendirilir.
+PORT_SCAN_TIME_WINDOW_SECONDS: int = 60
+PORT_SCAN_PORT_THRESHOLD: int = 15
+
 
 TIMELINE_BUCKET_SECONDS = 1
 for directory in (SAMPLES_DIR, REPORTS_DIR, TEMPLATES_DIR, STATIC_DIR, LOGS_DIR):
@@ -44,8 +55,6 @@ PROTOCOL_MAP = {
 UNKNOWN_PROTOCOL = "OTHER"
 DEFAULT_FLAGS = "NONE"
 
-PORT_SCAN_TIME_WINDOW = 5
-PORT_SCAN_THRESHOLD = 20
 EXFILTRATION_THRESHOLD = 50 * 1024 * 1024
 LONG_DOMAIN_LENGTH = 50
 DGA_ENTROPY_THRESHOLD = 3.5

@@ -1,5 +1,6 @@
 from modules.models import PacketInfo
 from modules.statistics import build_general_statistics
+import config
 
 
 def _make_packet(epoch_time, src_ip, dst_ip, length, transport="TCP",
@@ -34,6 +35,8 @@ def test_total_packets_and_bytes():
     stats = build_general_statistics(packets)
     assert stats.total_packets == 2
     assert stats.total_bytes == 300
+    assert stats.first_packet_time == 1.0
+    assert stats.last_packet_time == 2.0
     assert stats.capture_duration == 1.0
 
 
@@ -43,9 +46,16 @@ def test_top_bandwidth_hosts_counts_bytes_not_packets():
         _make_packet(2.0, "10.0.0.9", "10.0.0.9", 1),
     ]
     stats = build_general_statistics(packets)
-    top_ip, top_bytes = stats.top_bandwidth_hosts[0]
-    assert top_ip == "10.0.0.1"
-    assert top_bytes == 1000
+    
+    # Host bandwidth hem gelen hem giden trafiği (src + dst) toplar:
+    # 10.0.0.1 -> 1000 byte (src)
+    # 10.0.0.2 -> 1000 byte (dst)
+    # 10.0.0.9 -> 2 byte (1 src + 1 dst)
+    assert stats.top_bandwidth_hosts == [
+        ("10.0.0.1", 1000),
+        ("10.0.0.2", 1000),
+        ("10.0.0.9", 2),
+    ]
 
 
 def test_udp_ports_counts_both_src_and_dst():
@@ -61,15 +71,24 @@ def test_udp_ports_counts_both_src_and_dst():
 
 
 def test_timeline_uses_epoch_based_buckets():
+    bucket_size = getattr(config, "TIMELINE_BUCKET_SECONDS", 1.0)
+    
+    t0 = 100.0
+    t1 = t0 + (bucket_size * 0.4)  # t0 ile aynı bucket
+    t2 = t0 + (bucket_size * 1.2)  # bir sonraki bucket
+
     packets = [
-        _make_packet(100.0, "10.0.0.1", "10.0.0.2", 50),
-        _make_packet(100.4, "10.0.0.1", "10.0.0.2", 50),
-        _make_packet(101.2, "10.0.0.1", "10.0.0.2", 50),
+        _make_packet(t0, "10.0.0.1", "10.0.0.2", 50),
+        _make_packet(t1, "10.0.0.1", "10.0.0.2", 50),
+        _make_packet(t2, "10.0.0.1", "10.0.0.2", 50),
     ]
     stats = build_general_statistics(packets)
-    # bucket_seconds=1 varsayımıyla: 100.0 ve 100.4 aynı bucket'a düşer
-    assert stats.timeline[100.0] == 2
-    assert stats.timeline[101.0] == 1
+
+    bucket_1_key = (t0 // bucket_size) * bucket_size
+    bucket_2_key = (t2 // bucket_size) * bucket_size
+
+    assert stats.timeline[bucket_1_key] == 2
+    assert stats.timeline[bucket_2_key] == 1
 
 
 def test_invalid_timestamp_excluded_from_time_calculations():

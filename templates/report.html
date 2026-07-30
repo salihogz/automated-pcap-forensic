@@ -1,0 +1,430 @@
+"""HTML rapor üretim modülü — PCAP Forensic Analysis Tool.
+
+Sorumluluk
+----------
+Bu modül; Statistics, Threat Detector (ve ileride Threat Intel) çıktısını
+tek dosyalık, tamamen offline çalışan profesyonel bir HTML rapora
+dönüştürür. Görünüm (Jinja2 template) ile üretim mantığı (bu dosya)
+kesin olarak birbirinden ayrılmıştır.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import logging
+import sys
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Final
+
+import matplotlib
+
+matplotlib.use("Agg")  # GUI'siz ortamlarda (sunucu/CI) render için zorunlu.
+
+import matplotlib.pyplot as plt
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2.exceptions import TemplateError, UndefinedError
+
+from modules.models import GeneralStatistics, ThreatFinding, ThreatSeverity
+
+logger = logging.getLogger(__name__)
+
+_TEMPLATE_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "templates"
+_TEMPLATE_NAME: Final[str] = "report.html.j2"
+_TOOL_VERSION: Final[str] = "1.2.0-forensic"
+
+_SEVERITY_WEIGHT: Final[dict[ThreatSeverity, int]] = {
+    ThreatSeverity.LOW: 1,
+    ThreatSeverity.MEDIUM: 3,
+    ThreatSeverity.HIGH: 7,
+    ThreatSeverity.CRITICAL: 12,
+}
+
+_RISK_THRESHOLDS: Final[tuple[tuple[int, str, str], ...]] = (
+    (0, "TEMİZ", "clean"),
+    (5, "DÜŞÜK", "low"),
+    (15, "ORTA", "medium"),
+    (30, "YÜKSEK", "high"),
+    (60, "KRİTİK", "critical"),
+)
+
+_SEVERITY_PRIORITY: Final[dict[ThreatSeverity, int]] = {
+    severity: idx for idx, severity in enumerate(reversed(list(ThreatSeverity)))
+}
+_SEVERITY_ORDER: Final[list[str]] = [s.value for s in ThreatSeverity]
+
+
+class ReportGenerationError(Exception):
+    """Rapor üretimi başarısız olduğunda fırlatılır (Fail Fast)."""
+
+
+@dataclass(frozen=True, slots=True)
+class TableRow:
+    """Grafik yanındaki analist veri tablosunun bir satırı."""
+
+    label: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChartSection:
+    """Rapor içerisindeki grafik ve tablo bölümünü temsil eden tip güvenli yapı."""
+
+    id: str
+    title: str
+    image: str
+    table: list[TableRow]
+    val_header: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReportMetadata:
+    """Raporun 'Genel Özet' bölümünde gösterilecek meta veriler."""
+
+    source_file: str
+    analysis_duration_seconds: float
+    sha256: str | None = None
+    tool_version: str = _TOOL_VERSION
+    python_version: str = field(
+        default_factory=lambda: f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    )
+    generated_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass(frozen=True, slots=True)
+class RiskSummary:
+    """Bulgu listesinden türetilen genel risk özeti."""
+
+    total_findings: int
+    severity_counts: dict[str, int]
+    risk_score: int
+    risk_level: str
+    risk_class: str
+
+
+def compute_risk_summary(findings: Sequence[ThreatFinding]) -> RiskSummary:
+    severity_counts: dict[str, int] = {s.value: 0 for s in ThreatSeverity}
+    risk_score = 0
+
+    for finding in findings:
+        severity_counts[finding.severity.value] += 1
+        risk_score += _SEVERITY_WEIGHT[finding.severity]
+
+    risk_level = _RISK_THRESHOLDS[0][1]
+    risk_class = _RISK_THRESHOLDS[0][2]
+
+    for threshold, label, css_class in reversed(_RISK_THRESHOLDS):
+        if risk_score >= threshold:
+            risk_level = label
+            risk_class = css_class
+            break
+
+    return RiskSummary(
+        total_findings=len(findings),
+        severity_counts=severity_counts,
+        risk_score=risk_score,
+        risk_level=risk_level,
+        risk_class=risk_class,
+    )
+
+
+class ChartBuilder:
+    """İstatistik verilerinden base64 kodlu PNG grafikler ve detay tabloları inşa eder."""
+
+    _FIGSIZE: Final[tuple[float, float]] = (8.0, 4.2)
+    _DPI: Final[int] = 110
+    _TOP_N_HOSTS: Final[int] = 10
+    _TOP_N_PORTS: Final[int] = 15
+
+    def protocol_distribution_chart(
+        self, distribution: dict[str, int]
+    ) -> tuple[str | None, list[TableRow]]:
+        if not distribution:
+            return None, []
+
+        items = sorted(distribution.items(), key=lambda kv: kv[1], reverse=True)
+        labels, values = zip(*items, strict=True)
+
+        fig, ax = plt.subplots(figsize=self._FIGSIZE, dpi=self._DPI)
+        ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=90)
+        ax.set_title("Protokol Dağılımı")
+
+        table_data = [TableRow(label=k, value=f"{v:,}") for k, v in items]
+        return self._to_base64(fig), table_data
+
+    def top_hosts_chart(
+        self, hosts: Sequence[tuple[str, int]], title: str, xlabel: str
+    ) -> tuple[str | None, list[TableRow]]:
+        if not hosts:
+            return None, []
+
+        top = list(hosts[: self._TOP_N_HOSTS])
+        labels = [host for host, _ in reversed(top)]
+        values = [count for _, count in reversed(top)]
+
+        fig, ax = plt.subplots(figsize=self._FIGSIZE, dpi=self._DPI)
+        ax.barh(labels, values, color="#2563eb")
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        fig.tight_layout()
+
+        table_data = [
+            TableRow(label=host, value=f"{count:,}") for host, count in top
+        ]
+        return self._to_base64(fig), table_data
+
+    def port_distribution_chart(
+        self, ports: dict[int, int]
+    ) -> tuple[str | None, list[TableRow]]:
+        if not ports:
+            return None, []
+
+        top = sorted(ports.items(), key=lambda kv: kv[1], reverse=True)[: self._TOP_N_PORTS]
+        labels = [str(port) for port, _ in top]
+        values = [count for _, count in top]
+
+        fig, ax = plt.subplots(figsize=self._FIGSIZE, dpi=self._DPI)
+        ax.bar(labels, values, color="#059669")
+        ax.set_title(f"Port Dağılımı (İlk {self._TOP_N_PORTS})")
+        ax.set_xlabel("Port")
+        ax.set_ylabel("Paket Sayısı")
+        ax.tick_params(axis="x", rotation=45)
+        fig.tight_layout()
+
+        table_data = [
+            TableRow(label=f"Port {port}", value=f"{count:,}") for port, count in top
+        ]
+        return self._to_base64(fig), table_data
+
+    def timeline_chart(
+        self, timeline: dict[str, int]
+    ) -> tuple[str | None, list[TableRow]]:
+        if not timeline:
+            return None, []
+
+        items = sorted(timeline.items())
+        labels = [label for label, _ in items]
+        values = [count for _, count in items]
+
+        fig, ax = plt.subplots(figsize=self._FIGSIZE, dpi=self._DPI)
+        ax.plot(range(len(values)), values, color="#dc2626", linewidth=1.5)
+        ax.fill_between(range(len(values)), values, alpha=0.15, color="#dc2626")
+        ax.set_title("Zaman Çizelgesi (Paket Trafiği)")
+        ax.set_ylabel("Paket Sayısı")
+
+        step = max(len(labels) // 10, 1)
+        tick_positions = range(0, len(labels), step)
+        ax.set_xticks(list(tick_positions))
+        ax.set_xticklabels([labels[i] for i in tick_positions], rotation=45, ha="right")
+        fig.tight_layout()
+
+        table_data = [
+            TableRow(label=time_bucket, value=f"{count:,}") for time_bucket, count in items
+        ]
+        return self._to_base64(fig), table_data
+
+    @staticmethod
+    def _to_base64(fig: plt.Figure) -> str:
+        buffer = io.BytesIO()
+        try:
+            fig.savefig(buffer, format="png", bbox_inches="tight")
+            return base64.b64encode(buffer.getvalue()).decode("ascii")
+        finally:
+            plt.close(fig)
+            buffer.close()
+
+
+class Reporter:
+    """Analiz sonuçlarını tek dosyalık, offline HTML rapora dönüştürür."""
+
+    def __init__(
+        self,
+        template_dir: Path | None = None,
+        template_name: str = _TEMPLATE_NAME,
+        chart_builder: ChartBuilder | None = None,
+    ) -> None:
+        resolved_dir = template_dir or _TEMPLATE_DIR
+        if not resolved_dir.is_dir():
+            raise ReportGenerationError(f"Şablon dizini bulunamadı: {resolved_dir}")
+
+        self._env = Environment(
+            loader=FileSystemLoader(str(resolved_dir)),
+            autoescape=select_autoescape(enabled_extensions=("html", "j2")),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+        self._template_name = template_name
+        self._chart_builder = chart_builder or ChartBuilder()
+        logger.debug("Reporter başlatıldı. Şablon dizini: %s", resolved_dir)
+
+    def generate(
+        self,
+        statistics: GeneralStatistics,
+        findings: Sequence[ThreatFinding],
+        metadata: ReportMetadata,
+        output_path: Path,
+        iocs: Sequence[dict] | None = None,
+    ) -> Path:
+        logger.info("Generating report for %s...", metadata.source_file)
+        self._validate_inputs(statistics, metadata, output_path)
+
+        sorted_findings = self._sort_findings_by_severity(findings)
+        risk_summary = compute_risk_summary(findings)
+        charts_list = self._build_charts_list(statistics)
+
+        html = self._render(
+            metadata=metadata,
+            statistics=statistics,
+            findings=sorted_findings,
+            risk_summary=risk_summary,
+            charts=charts_list,
+            iocs=iocs or [],
+        )
+        self._write(html, output_path)
+
+        logger.info(
+            "Rapor başarıyla oluşturuldu: %s (%d bulgu, risk seviyesi: %s)",
+            output_path,
+            len(findings),
+            risk_summary.risk_level,
+        )
+        return output_path
+
+    def _build_charts_list(self, statistics: GeneralStatistics) -> list[ChartSection]:
+        charts: list[ChartSection] = []
+
+        # 1. Protokol Dağılımı
+        img, table = self._chart_builder.protocol_distribution_chart(
+            statistics.protocol_distribution
+        )
+        if img:
+            charts.append(
+                ChartSection(
+                    id="protocol_distribution",
+                    title="Protokol Dağılımı",
+                    image=img,
+                    table=table,
+                    val_header="Paket Sayısı",
+                )
+            )
+
+        # 2. Top Talkers
+        img, table = self._chart_builder.top_hosts_chart(
+            statistics.top_talkers, "En Aktif Hostlar (Top Talkers)", "Paket Sayısı"
+        )
+        if img:
+            charts.append(
+                ChartSection(
+                    id="top_talkers",
+                    title="En Aktif Hostlar (Top Talkers)",
+                    image=img,
+                    table=table,
+                    val_header="Paket Sayısı",
+                )
+            )
+
+        # 3. Top Bandwidth Hosts
+        img, table = self._chart_builder.top_hosts_chart(
+            statistics.top_bandwidth_hosts, "En Yüksek Bant Genişliği Kullananlar", "Byte"
+        )
+        if img:
+            charts.append(
+                ChartSection(
+                    id="top_bandwidth_hosts",
+                    title="En Yüksek Bant Genişliği Kullananlar",
+                    image=img,
+                    table=table,
+                    val_header="Toplam Boyut (Byte)",
+                )
+            )
+
+        # 4. Port Dağılımı
+        img, table = self._chart_builder.port_distribution_chart(
+            statistics.port_distribution
+        )
+        if img:
+            charts.append(
+                ChartSection(
+                    id="port_distribution",
+                    title="Port Dağılımı",
+                    image=img,
+                    table=table,
+                    val_header="Paket Sayısı",
+                )
+            )
+
+        # 5. Zaman Çizelgesi
+        img, table = self._chart_builder.timeline_chart(statistics.timeline)
+        if img:
+            charts.append(
+                ChartSection(
+                    id="timeline",
+                    title="Zaman Çizelgesi (Paket Trafiği)",
+                    image=img,
+                    table=table,
+                    val_header="Paket Sayısı",
+                )
+            )
+
+        return charts
+
+    def _render(
+        self,
+        *,
+        metadata: ReportMetadata,
+        statistics: GeneralStatistics,
+        findings: list[ThreatFinding],
+        risk_summary: RiskSummary,
+        charts: list[ChartSection],
+        iocs: Sequence[dict],
+    ) -> str:
+        try:
+            template = self._env.get_template(self._template_name)
+            return template.render(
+                metadata=metadata,
+                statistics=statistics,
+                findings=findings,
+                risk_summary=risk_summary,
+                charts=charts,
+                iocs=iocs,
+                severity_order=_SEVERITY_ORDER,
+            )
+        except UndefinedError as exc:
+            logger.error("Şablonda tanımlanmamış değişken hatası (UndefinedError): %s", exc)
+            raise ReportGenerationError(
+                f"Şablon render hatası (Tanımsız Değişken): {exc}"
+            ) from exc
+        except TemplateError as exc:
+            raise ReportGenerationError(f"Şablon render hatası: {exc}") from exc
+
+    @staticmethod
+    def _write(html: str, output_path: Path) -> None:
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(html, encoding="utf-8")
+        except OSError as exc:
+            raise ReportGenerationError(f"Rapor dosyaya yazılamadı: {exc}") from exc
+
+    @staticmethod
+    def _sort_findings_by_severity(findings: Sequence[ThreatFinding]) -> list[ThreatFinding]:
+        return sorted(findings, key=lambda f: _SEVERITY_PRIORITY[f.severity])
+
+    @staticmethod
+    def _validate_inputs(
+        statistics: GeneralStatistics, metadata: ReportMetadata, output_path: Path
+    ) -> None:
+        if statistics is None:
+            raise ReportGenerationError("statistics None olamaz.")
+        if metadata is None:
+            raise ReportGenerationError("metadata None olamaz.")
+        if output_path.is_dir():
+            raise ReportGenerationError(
+                f"Çıktı yolu bir dosya olmalıdır, ancak bir dizin belirtildi: '{output_path}'"
+            )
+        if output_path.suffix.lower() not in {".html", ".htm"}:
+            raise ReportGenerationError(
+                f"Çıktı dosyası .html veya .htm uzantılı olmalı, alınan: '{output_path.suffix}'"
+            )

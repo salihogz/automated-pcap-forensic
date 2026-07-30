@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>PCAP Adli Analiz Raporu — {{ metadata.source_file }}</title>
+<style>
+    :root {
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --panel-alt: #172033;
+        --border: #334155;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #2563eb;
+        --info: #38bdf8;
+        --low: #22c55e;
+        --medium: #eab308;
+        --high: #f97316;
+        --critical: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+        margin: 0;
+        font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.5;
+    }
+    header {
+        background: linear-gradient(135deg, #1e3a8a, #0f172a);
+        padding: 32px 40px;
+        border-bottom: 1px solid var(--border);
+    }
+    header h1 { margin: 0 0 6px; font-size: 26px; }
+    header p { margin: 0; color: var(--muted); }
+    main { max-width: 1200px; margin: 0 auto; padding: 32px 40px 80px; }
+    section { margin-bottom: 40px; }
+    h2 {
+        font-size: 18px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 8px;
+        margin-bottom: 20px;
+    }
+    .grid { display: grid; gap: 16px; }
+    .grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    
+    .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 18px 20px;
+    }
+    .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .card .value { font-size: 20px; font-weight: 600; margin-top: 4px; word-break: break-all; }
+    
+    .exec-summary {
+        background: var(--panel);
+        border-left: 4px solid var(--accent);
+        border-radius: 6px;
+        padding: 18px 24px;
+        font-size: 15px;
+        line-height: 1.6;
+        color: var(--text);
+    }
+
+    table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; table-layout: fixed; }
+    caption {
+        caption-side: top;
+        text-align: left;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        padding: 8px 12px;
+        background: var(--panel-alt);
+        border-bottom: 1px solid var(--border);
+    }
+    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; word-wrap: break-word; }
+    th { background: var(--panel-alt); color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; position: sticky; top: 0; z-index: 10; }
+    tr:last-child td { border-bottom: none; }
+    
+    .chart-container {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 16px;
+        align-items: start;
+    }
+    .chart-box { 
+        background: var(--panel); 
+        border: 1px solid var(--border); 
+        border-radius: 10px; 
+        padding: 16px; 
+        text-align: center; 
+    }
+    .chart-box img { max-width: 100%; max-height: 550px; height: auto; border-radius: 6px; display: block; margin: auto; }
+    .chart-desc { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+    .table-scroll { max-height: 420px; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+
+    .empty-state { color: var(--muted); font-style: italic; padding: 24px; text-align: center; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+    
+    .badge {
+        display: inline-block; padding: 3px 10px; border-radius: 999px;
+        font-size: 11px; font-weight: 700; letter-spacing: 0.03em; color: #0f172a;
+    }
+    .badge.INFO { background: var(--info); color: #0f172a; }
+    .badge.LOW { background: var(--low); }
+    .badge.MEDIUM { background: var(--medium); }
+    .badge.HIGH { background: var(--high); }
+    .badge.CRITICAL { background: var(--critical); color: #ffffff; }
+
+    .risk-banner {
+        background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+        padding: 20px 24px;
+    }
+    .risk-header { display: flex; align-items: center; justify-content: space-between; }
+    .risk-banner .risk-level { font-size: 28px; font-weight: 700; }
+    .risk-banner.clean .risk-level { color: var(--low); }
+    .risk-banner.low .risk-level { color: var(--low); }
+    .risk-banner.medium .risk-level { color: var(--medium); }
+    .risk-banner.high .risk-level { color: var(--high); }
+    .risk-banner.critical .risk-level { color: var(--critical); }
+
+    .progress-bar-bg {
+        width: 100%; background: var(--panel-alt); border-radius: 999px; height: 12px; margin-top: 14px; overflow: hidden; border: 1px solid var(--border);
+    }
+    .progress-bar-fill {
+        height: 100%; border-radius: 999px; transition: width 0.3s ease;
+    }
+    .clean .progress-bar-fill, .low .progress-bar-fill { background: var(--low); }
+    .medium .progress-bar-fill { background: var(--medium); }
+    .high .progress-bar-fill { background: var(--high); }
+    .critical .progress-bar-fill { background: var(--critical); }
+
+    .evidence-box {
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 11px;
+    }
+    .evidence-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 3px 0;
+        border-bottom: 1px dashed var(--border);
+    }
+    .evidence-row:last-child { border-bottom: none; }
+    .evidence-key { font-weight: 600; color: var(--muted); padding-right: 8px; }
+    .evidence-val { word-break: break-all; text-align: right; }
+
+    .finding-title {
+        font-weight: 600;
+        color: var(--text);
+        margin-bottom: 4px;
+    }
+    .finding-desc {
+        color: var(--muted);
+        font-size: 12px;
+    }
+
+    footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; border-top: 1px solid var(--border); }
+
+    @media (max-width: 900px) {
+        .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+        .chart-container { grid-template-columns: 1fr; }
+        .risk-header { flex-direction: column; align-items: flex-start; gap: 16px; }
+    }
+
+    @media print {
+        body { background: white !important; color: black !important; font-size: 12pt; }
+        header { background: none !important; border-bottom: 2px solid #000; padding: 10px 0; }
+        header h1 { color: black !important; }
+        main { max-width: 100%; padding: 10px 0; }
+        .card, .chart-box, .risk-banner, table, .exec-summary, .evidence-box { background: white !important; border: 1px solid #ccc !important; color: black !important; }
+        .card .label, .card .value, th, td, .chart-desc, .evidence-key { color: black !important; }
+        .badge { border: 1px solid #000; }
+        .table-scroll { max-height: none !important; overflow: visible !important; }
+        section { page-break-inside: avoid; margin-bottom: 20px; }
+    }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>PCAP Adli Analiz Raporu</h1>
+    <p>
+        {{ metadata.source_file }} &nbsp;•&nbsp; 
+        Oluşturulma: {% if metadata.generated_at.strftime is defined %}{{ metadata.generated_at.strftime('%d.%m.%Y %H:%M:%S') }}{% else %}{{ metadata.generated_at }}{% endif %} &nbsp;•&nbsp; 
+        Tool: v{{ metadata.tool_version }}
+    </p>
+</header>
+
+<main>
+
+    <!-- Executive Summary -->
+    <section>
+        <h2>Executive Summary (Yönetici Özeti)</h2>
+        <div class="exec-summary">
+            Analiz edilen <strong>{{ metadata.source_file }}</strong> isimli PCAP dosyasında toplam 
+            <strong>{% if statistics.total_packets_formatted is defined %}{{ statistics.total_packets_formatted }}{% else %}{{ "{:,}".format(statistics.total_packets) }}{% endif %}</strong> paket başarıyla incelenmiştir.
+            Yürütülen adli analiz sonucunda 
+            {% if risk_summary.total_findings > 0 %}
+                toplam <strong>{{ risk_summary.total_findings }}</strong> adet güvenlik tehdidi tespit edilmiş olup dağılımı: 
+                <strong>
+                    {% for k, v in risk_summary.severity_counts.items() if v > 0 %}
+                        {{ k }}: {{ v }}{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                </strong>şeklindedir. Sistem genelinde belirlenen risk seviyesi <strong>{{ risk_summary.risk_level }}</strong> (Ağırlıklı Skor: {{ risk_summary.risk_score }}/100 [Normalized]) olarak değerlendirilmiştir.
+            {% else %}
+                herhangi bir güvenlik ihlali veya şüpheli aktivite tespiti yapılmamıştır. Sistem genel risk seviyesi <strong>TEMİZ</strong> olarak değerlendirilmiştir.
+            {% endif %}
+        </div>
+    </section>
+
+    <!-- 1. Genel Özet -->
+    <section>
+        <h2>1. Genel Özet</h2>
+        <div class="grid grid-4">
+            <div class="card">
+                <div class="label">Dosya Adı</div>
+                <div class="value" style="font-size:15px;">{{ metadata.source_file }}</div>
+            </div>
+            <div class="card">
+                <div class="label">Analiz Süresi</div>
+                <div class="value">
+                    {% if metadata.analysis_duration_formatted is defined %}
+                        {{ metadata.analysis_duration_formatted }}
+                    {% else %}
+                        {{ "%.2f"|format(metadata.analysis_duration_seconds) }} s
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">Toplam Paket</div>
+                <div class="value">
+                    {% if statistics.total_packets_formatted is defined %}{{ statistics.total_packets_formatted }}{% else %}{{ "{:,}".format(statistics.total_packets) }}{% endif %}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">Toplam Hacim</div>
+                <div class="value">
+                    {% if statistics.total_bytes_formatted is defined %}{{ statistics.total_bytes_formatted }}{% else %}{{ statistics.total_bytes }}{% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-4" style="margin-top:16px;">
+            <div class="card">
+                <div class="label">Yakalama Başlangıcı</div>
+                <div class="value" style="font-size:14px;">
+                    {% if statistics.start_time_formatted is defined %}{{ statistics.start_time_formatted }}{% elif statistics.start_time is defined and statistics.start_time.strftime is defined %}{{ statistics.start_time.strftime('%Y-%m-%d %H:%M:%S') }}{% else %}{{ statistics.start_time|default('-') }}{% endif %}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">Yakalama Bitişi</div>
+                <div class="value" style="font-size:14px;">
+                    {% if statistics.end_time_formatted is defined %}{{ statistics.end_time_formatted }}{% elif statistics.end_time is defined and statistics.end_time.strftime is defined %}{{ statistics.end_time.strftime('%Y-%m-%d %H:%M:%S') }}{% else %}{{ statistics.end_time|default('-') }}{% endif %}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">Geçen Süre (Duration)</div>
+                <div class="value" style="font-size:14px;">
+                    {% if statistics.duration_formatted is defined %}{{ statistics.duration_formatted }}{% else %}{{ statistics.duration_seconds|default(0) }}s{% endif %}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">En Aktif Host (Top IP)</div>
+                <div class="value" style="font-size:14px;">
+                    {{ statistics.top_source_ip|default(statistics.top_ip|default('-')) }}
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-4" style="margin-top:16px;">
+            <div class="card">
+                <div class="label">IPv4 / IPv6</div>
+                <div class="value" style="font-size:15px;">
+                    {{ statistics.ipv4_count_formatted|default(statistics.ipv4_count|default(0)) }} / {{ statistics.ipv6_count_formatted|default(statistics.ipv6_count|default(0)) }}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">TCP / UDP</div>
+                <div class="value" style="font-size:15px;">
+                    {{ statistics.tcp_count_formatted|default(statistics.tcp_count|default(0)) }} / {{ statistics.udp_count_formatted|default(statistics.udp_count|default(0)) }}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">HTTP / DNS</div>
+                <div class="value" style="font-size:15px;">
+                    {{ statistics.http_count_formatted|default(statistics.http_count|default(0)) }} / {{ statistics.dns_count_formatted|default(statistics.dns_count|default(0)) }}
+                </div>
+            </div>
+            <div class="card">
+                <div class="label">TLS (HTTPS)</div>
+                <div class="value" style="font-size:15px;">
+                    {{ statistics.tls_count_formatted|default(statistics.tls_count|default(0)) }}
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 2. Trafik Grafikleri ve Analist Tabloları -->
+    {% if charts %}
+        {% for chart in charts %}
+        <section id="{{ chart.id }}">
+            <h2>{{ loop.index + 1 }}. {{ chart.title }}</h2>
+            <p class="chart-desc">{{ chart.description }}</p>
+            <div class="chart-container">
+                <div class="chart-box">
+                    <img src="data:image/png;base64,{{ chart.image }}" alt="{{ chart.title }}">
+                </div>
+                {% if chart.table %}
+                <div class="table-scroll">
+                    <table>
+                        <caption>{{ chart.title }} - Özet Veri Tablosu</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Parametre / Etiket</th>
+                                <th scope="col">{{ chart.val_header }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in chart.table %}
+                            <tr>
+                                <td>{{ row.label }}</td>
+                                <td><strong>{{ row.value }}</strong></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+        {% endfor %}
+    {% endif %}
+
+    <!-- 3. Tehdit Bulguları -->
+    <section>
+        <h2>{{ charts|length + 2 }}. Tehdit Bulguları ({{ findings|length }})</h2>
+        {% if findings %}
+        <table>
+            <caption>Tespit Edilen Adli Tehdit Bulguları Listesi</caption>
+            <thead>
+                <tr>
+                    <th scope="col" style="width: 12%;">Zaman</th>
+                    <th scope="col" style="width: 13%;">Rule ID</th>
+                    <th scope="col" style="width: 10%;">Önem</th>
+                    <th scope="col" style="width: 12%;">Kaynak IP</th>
+                    <th scope="col" style="width: 12%;">Hedef IP</th>
+                    <th scope="col" style="width: 22%;">Başlık &amp; Açıklama</th>
+                    <th scope="col" style="width: 19%;">Kanıt</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for finding in findings %}
+                <tr>
+                    <td>
+                        {% if finding.formatted_timestamp is defined %}
+                            {{ finding.formatted_timestamp }}
+                        {% elif finding.timestamp is defined and finding.timestamp.strftime is defined %}
+                            {{ finding.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+                        {% else %}
+                            {{ finding.timestamp|default('-') }}
+                        {% endif %}
+                    </td>
+                    <td><strong>{{ finding.rule_id }}</strong></td>
+                    <td>
+                        {% set sev = finding.severity_str|default(finding.severity)|string|upper %}
+                        <span class="badge {{ sev }}">{{ sev }}</span>
+                    </td>
+                    <td>{{ finding.source|default('-') }}</td>
+                    <td>{{ finding.destination|default('-') }}</td>
+                    <td>
+                        {% if finding.title %}
+                        <div class="finding-title">{{ finding.title }}</div>
+                        {% endif %}
+                        <div class="finding-desc">{{ finding.description }}</div>
+                    </td>
+                    <td>
+                        {% if finding.evidence %}
+                        <div class="evidence-box">
+                            {% for key, val in finding.evidence.items() %}
+                            <div class="evidence-row">
+                                <span class="evidence-key">{{ key }}:</span>
+                                <span class="evidence-val">{{ val }}</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">İnceleme sonucunda herhangi bir tehdit bulgusuna rastlanmamıştır.</div>
+        {% endif %}
+    </section>
+
+    <!-- 4. Genel Risk Özeti -->
+    <section>
+        <h2>{{ charts|length + 3 }}. Genel Risk Özeti</h2>
+        <div class="risk-banner {{ risk_summary.risk_class }}">
+            <div class="risk-header">
+                <div>
+                    <div class="label" style="color:var(--muted); font-size:12px; text-transform:uppercase;">Risk Seviyesi</div>
+                    <div class="risk-level">{{ risk_summary.risk_level }}</div>
+                </div>
+                <div style="display:flex; gap:20px; align-items:center;">
+                    {% for sev in ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] %}
+                    <div style="text-align:center;">
+                        <span class="badge {{ sev }}">{{ sev }}</span>
+                        <div style="font-size:18px; font-weight:700; margin-top:6px;">{{ risk_summary.severity_counts.get(sev, 0) }}</div>
+                    </div>
+                    {% endfor %}
+                    <div style="border-left: 1px solid var(--border); padding-left: 20px; text-align:center;">
+                        <div class="label" style="color:var(--muted); font-size:11px; text-transform:uppercase;">Skor</div>
+                        <div style="font-size:22px; font-weight:700; margin-top:4px; color:var(--accent);">{{ risk_summary.risk_score }} / 100</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="progress-bar-bg" title="Risk Skoru: {{ risk_summary.risk_score }}/100">
+                <div class="progress-bar-fill" style="width: {{ risk_summary.risk_score }}%;"></div>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<footer>
+    Automated PCAP Forensic Analysis Tool — Reporter v{{ metadata.tool_version }} | Python v{{ metadata.python_version }} | Rapor Oluşturulma: {% if metadata.generated_at.strftime is defined %}{{ metadata.generated_at.strftime('%d.%m.%Y %H:%M:%S') }}{% else %}{{ metadata.generated_at }}{% endif %}
+</footer>
+
+</body>
+</html>

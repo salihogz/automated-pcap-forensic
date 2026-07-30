@@ -9,8 +9,12 @@ from time import perf_counter
 
 import config
 from modules.parser import PCAPParser
+from modules.reporter import Reporter
+from modules.statistics import build_general_statistics
+from modules.threat_detector import ThreatDetector
 
 logger = logging.getLogger(__name__)
+
 
 def setup_logging(verbose: bool = False) -> None:
     """Merkezi loglama yapılandırmasını başlatır."""
@@ -22,7 +26,7 @@ def setup_logging(verbose: bool = False) -> None:
             logging.StreamHandler(sys.stdout),
             logging.FileHandler(config.LOGS_DIR / config.DEFAULT_LOG_NAME, encoding="utf-8"),
         ],
-        force=True
+        force=True,
     )
 
 
@@ -47,13 +51,12 @@ def resolve_target_path(args: argparse.Namespace) -> Path | None:
     """Hedef pcap dosyasını -f parametresinden ya da samples/ dizininden (alt klasörler dahil) belirler."""
     if args.file:
         if not args.file.exists():
-            logger.error(f"Belirtilen dosya bulunamadı: {args.file}")
+            logger.error("Belirtilen dosya bulunamadı: %s", args.file)
             return None
         return args.file
 
     # rglob kullanılıyor çünkü örnek dosyalar samples/clean/ ve
-    # samples/malicious/ alt klasörlerinde tutuluyor; glob() sadece
-    # kök dizine baktığı için bu dosyaları göremezdi.
+    # samples/malicious/ alt klasörlerinde tutuluyor.
     sample_files = sorted(
         f for ext in config.SUPPORTED_EXTENSIONS for f in config.SAMPLES_DIR.rglob(f"*{ext}")
     )
@@ -62,7 +65,7 @@ def resolve_target_path(args: argparse.Namespace) -> Path | None:
         return None
 
     target_path = sample_files[0]
-    logger.info(f"Dosya parametresi verilmedi. Örnek dosya seçildi: {target_path.name}")
+    logger.info("Dosya parametresi verilmedi. Örnek dosya seçildi: %s", target_path.name)
     return target_path
 
 
@@ -78,24 +81,58 @@ def main() -> int:
     try:
         logger.info("Hedef dosya: %s", target_path)
         start_time = perf_counter()
-        
+
+        # 1. Parsing
         pcap_parser = PCAPParser(target_path)
         packets = pcap_parser.parse()
-        
-        duration = perf_counter() - start_time
-        logger.info(f"İşlem {duration:.2f} saniyede tamamlandı. Ayrıştırılan paket sayısı: {len(packets)}")
 
+        # 2. General Statistics Generation
+        stats = build_general_statistics(packets)
+
+        # 3. Threat Detection Engine
+        detector = ThreatDetector(stats)
+        findings = detector.detect(packets)
+
+        duration = perf_counter() - start_time
+
+        # 4. HTML Report Generation
+        reporter = Reporter()
+        report_path = reporter.generate(
+            statistics=stats,
+            findings=findings,
+            source_file=target_path,
+            analysis_duration=duration,
+        )
+        logger.info("HTML raporu oluşturuldu: %s", report_path)
+
+        logger.info(
+            "İşlem %.2f saniyede tamamlandı. Ayrıştırılan paket sayısı: %d",
+            duration,
+            len(packets),
+        )
+        logger.info(
+            "Statistics oluşturuldu. Threat Findings: %d",
+            len(findings),
+        )
+
+        # 5. Console Outputs (Verbose modda hızlı debug çıktıları)
         if packets and args.verbose:
             print("\n--- İLK 3 PAKET (Dataclass Örneği) ---")
             for pkt in packets[:3]:
                 print(pkt)
+
+        if findings and args.verbose:
+            print("\n--- THREAT FINDINGS ---")
+            for finding in findings:
+                print(finding)
+
         return 0
 
     except (FileNotFoundError, ValueError, RuntimeError) as e:
-        logger.error(f"Analiz başarısız oldu: {e}")
+        logger.error("Analiz başarısız oldu: %s", e)
         return 1
     except Exception as e:
-        logger.exception(f"Beklenmeyen bir hata oluştu: {e}")
+        logger.exception("Beklenmeyen bir hata oluştu: %s", e)
         return 1
 
 
