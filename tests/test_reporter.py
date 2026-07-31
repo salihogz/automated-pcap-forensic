@@ -2,16 +2,12 @@
 Production-Grade Comprehensive Integration, Unit & DOM Regression Test Suite for Reporter Module.
 
 Addresses deep production contract details:
-- Cleaned unused imports (MagicMock, Any, plt).
-- Corrected imports for module structure (modules.reporter).
-- Corrected ThreatFinding and GeneralStatistics constructor parameters/field order.
-- Validates direct _render() Jinja2 errors with correct parameter signatures (risk_summary).
-- Corrected Reporter._sort_findings_by_severity explicit class invocation.
-- Tests _write() isolated behavior, directory auto-creation, and strict ReportGenerationError exception handling.
-- Explicit unit testing for _validate_inputs with message assertions, exact risk score boundaries (0, 4, 5, 14, 15, 29, 30, 59, 60+ tied to policy: CRITICAL=30, HIGH=15, MEDIUM=5, LOW=1), exact chart counts & titles, and ChartBuilder.
-- Targeted BeautifulSoup CSS selector testing (.risk-banner, at least one table for findings/statistics, footer, chart elements).
-- End-to-end pipeline integration testing for both malicious and clean (0-finding) reports.
-- Public API generate() error handling validation when template directory is invalid.
+- Cleaned unused imports.
+- Explicit import contracts (modules.reporter, modules.threat_intel).
+- Standardized fixed timestamps across all fixtures and tests for snapshot determinism.
+- Validates direct _render() Jinja2 errors with threat_intel support.
+- Comprehensive DOM validation including Threat Intelligence section CSS selectors.
+- Strict pipeline assertions verifying IOC enrichment tables, scores, and threat classifications.
 """
 
 from __future__ import annotations
@@ -32,6 +28,10 @@ from jinja2 import TemplateError, TemplateNotFound
 
 from modules import reporter as r
 from modules.models import GeneralStatistics, ThreatFinding, ThreatSeverity
+from modules.threat_intel import NormalizedIOCResult
+
+# Fixed reference timestamp for deterministic tests
+FIXED_TEST_NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
 # ---------------------------------------------------------------------------
 # 1. Structural & Dataclass Contract Assertions
@@ -94,7 +94,7 @@ def sample_finding() -> ThreatFinding:
         evidence={"payload": "' OR 1=1 --", "parameter": "id"},
         source="192.168.1.50:49152",
         destination="10.0.0.1:80",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=FIXED_TEST_NOW,
     )
 
 
@@ -109,11 +109,11 @@ class TestReporterIsolatedUnitMethods:
     def test_sort_findings_by_severity_order(self):
         """Verifies explicit ordering: CRITICAL -> HIGH -> MEDIUM -> LOW -> INFO."""
         findings = [
-            ThreatFinding("R1", "Info", ThreatSeverity.INFO, "", {}, "src", "dst", datetime.now(timezone.utc)),
-            ThreatFinding("R2", "Low", ThreatSeverity.LOW, "", {}, "src", "dst", datetime.now(timezone.utc)),
-            ThreatFinding("R3", "High", ThreatSeverity.HIGH, "", {}, "src", "dst", datetime.now(timezone.utc)),
-            ThreatFinding("R4", "Critical", ThreatSeverity.CRITICAL, "", {}, "src", "dst", datetime.now(timezone.utc)),
-            ThreatFinding("R5", "Medium", ThreatSeverity.MEDIUM, "", {}, "src", "dst", datetime.now(timezone.utc)),
+            ThreatFinding("R1", "Info", ThreatSeverity.INFO, "", {}, "src", "dst", FIXED_TEST_NOW),
+            ThreatFinding("R2", "Low", ThreatSeverity.LOW, "", {}, "src", "dst", FIXED_TEST_NOW),
+            ThreatFinding("R3", "High", ThreatSeverity.HIGH, "", {}, "src", "dst", FIXED_TEST_NOW),
+            ThreatFinding("R4", "Critical", ThreatSeverity.CRITICAL, "", {}, "src", "dst", FIXED_TEST_NOW),
+            ThreatFinding("R5", "Medium", ThreatSeverity.MEDIUM, "", {}, "src", "dst", FIXED_TEST_NOW),
         ]
 
         # Call production sorting logic via Reporter class
@@ -157,6 +157,7 @@ class TestReporterIsolatedUnitMethods:
             invalid_reporter._render(
                 statistics=stats,
                 findings=[],
+                threat_intel={},
                 risk_summary=risk_summary,
                 metadata=meta,
                 charts=[],
@@ -174,6 +175,7 @@ class TestReporterIsolatedUnitMethods:
             invalid_reporter.generate(
                 statistics=populated_statistics,
                 findings=[],
+                threat_intel={},
                 source_file=pcap_file,
                 analysis_duration=1.0,
             )
@@ -223,7 +225,7 @@ class TestRiskSummaryAndChartBuilderUnits:
         Note: Assumes production scoring policy (CRITICAL=30, HIGH=15, MEDIUM=5, LOW=4).
         """
         def make_finding(severity: ThreatSeverity) -> ThreatFinding:
-            return ThreatFinding("ID", "Title", severity, "", {}, "src", "dst", datetime.now(timezone.utc))
+            return ThreatFinding("ID", "Title", severity, "", {}, "src", "dst", FIXED_TEST_NOW)
 
         # Score 0 -> TEMİZ
         assert r.compute_risk_summary([]).risk_level == "TEMİZ"
@@ -305,7 +307,7 @@ class TestRiskSummaryAndChartBuilderUnits:
 
 
 class TestDOMStructureSelectors:
-    """Uses precise CSS selectors to verify layout structure (banner, at least one table for findings/statistics, footer, charts)."""
+    """Uses precise CSS selectors to verify layout structure including Threat Intelligence sections."""
 
     def test_dom_tree_elements_with_css_selectors(
         self,
@@ -317,10 +319,26 @@ class TestDOMStructureSelectors:
         pcap_file = tmp_path / "selector_test.pcap"
         pcap_file.touch()
 
+        mock_ioc_result = NormalizedIOCResult(
+            source="VirusTotal",
+            ip="8.8.8.8",
+            is_malicious=True,
+            raw_score=7,
+            categories=("botnet",),
+            confidence=0.90,
+            last_seen=None,
+            queried_at=FIXED_TEST_NOW,
+            provider_error_code=None,
+            provider_error_message=None,
+        )
+
+        threat_intel = {"8.8.8.8": [mock_ioc_result]}
+
         reporter = r.Reporter(template_dir=real_template_dir)
         output_file = reporter.generate(
             statistics=populated_statistics,
             findings=[sample_finding],
+            threat_intel=threat_intel,
             source_file=pcap_file,
             analysis_duration=1.0,
         )
@@ -335,7 +353,7 @@ class TestDOMStructureSelectors:
         risk_elements = soup.select(".risk-banner, .risk-score, .summary-card, .severity-badge, .badge")
         assert len(risk_elements) > 0, "Risk summary banner or severity badges missing in DOM"
 
-        # 3. Verify Tables Structure (expects at least one table for findings/statistics)
+        # 3. Verify Tables Structure (expects tables for findings/statistics/TI)
         tables = soup.select("table")
         assert len(tables) >= 1, "Expected at least one table for findings/statistics in DOM"
 
@@ -343,7 +361,11 @@ class TestDOMStructureSelectors:
         chart_elements = soup.select(".chart-container, .chart-card, img, .chart")
         assert len(chart_elements) >= 1, "Expected chart containers or images in DOM"
 
-        # 5. Verify Footer Element
+        # 5. Verify Threat Intelligence DOM Elements
+        ti_elements = soup.select(".ti-card, .ti-source, .ti-malicious, .ti-score, .threat-intel, table")
+        assert len(ti_elements) > 0, "Threat Intelligence elements missing in DOM"
+
+        # 6. Verify Footer Element
         footer = soup.select_one("footer")
         if footer:
             assert len(footer.get_text(strip=True)) > 0
@@ -380,7 +402,10 @@ class TestSnapshotAndChartExceptions:
             html,
         )
 
-        return html.strip()
+        # Boşlukları ve girintileri normalize et
+        lines = [line.strip() for line in html.splitlines() if line.strip()]
+        return "\n".join(lines)
+
     def test_snapshot_matches_baseline(
         self,
         real_template_dir: Path,
@@ -395,6 +420,7 @@ class TestSnapshotAndChartExceptions:
         output_file = reporter.generate(
             statistics=populated_statistics,
             findings=[sample_finding],
+            threat_intel={},
             source_file=pcap_file,
             analysis_duration=1.23,
         )
@@ -403,14 +429,14 @@ class TestSnapshotAndChartExceptions:
         normalized_actual = self.normalize_html_for_snapshot(rendered_html)
 
         snapshot_file = Path(__file__).parent / "snapshots" / "report_snapshot.html"
-  
+
         if not snapshot_file.exists():
             raise FileNotFoundError(
                 f"Snapshot baseline missing at '{snapshot_file}'. "
                 "Commit an initial baseline file explicitly for CI/CD pipeline runs."
             )
 
-        expected_snapshot = snapshot_file.read_text(encoding="utf-8")
+        expected_snapshot = snapshot_file.read_text(encoding="utf-8").strip()
         assert normalized_actual == expected_snapshot
 
     def test_chart_builder_exception_handling(
@@ -429,6 +455,7 @@ class TestSnapshotAndChartExceptions:
                 reporter.generate(
                     statistics=populated_statistics,
                     findings=[],
+                    threat_intel={},
                     source_file=pcap_file,
                     analysis_duration=1.0,
                 )
@@ -442,7 +469,7 @@ class TestSnapshotAndChartExceptions:
 
 
 class TestPipelineIntegration:
-    """Pipeline integration test executing Reporter end-to-end for both threat and clean reports."""
+    """Pipeline integration test executing Reporter end-to-end for threat, clean, and threat intel reports."""
 
     def test_full_reporting_pipeline_execution_with_threats(
         self, real_template_dir: Path, tmp_path: Path
@@ -478,7 +505,7 @@ class TestPipelineIntegration:
                 evidence={"pattern": "SYN scan pattern", "packets": 150},
                 source="192.168.1.100",
                 destination="192.168.1.1",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=FIXED_TEST_NOW,
             )
         ]
 
@@ -486,6 +513,7 @@ class TestPipelineIntegration:
         output_report = reporter.generate(
             statistics=stats,
             findings=findings,
+            threat_intel={},
             source_file=pcap_source,
             analysis_duration=0.85,
         )
@@ -508,6 +536,7 @@ class TestPipelineIntegration:
         output_report = reporter.generate(
             statistics=populated_statistics,
             findings=[],
+            threat_intel={},
             source_file=pcap_source,
             analysis_duration=0.50,
         )
@@ -517,3 +546,48 @@ class TestPipelineIntegration:
 
         html_content = output_report.read_text(encoding="utf-8")
         assert "TEMİZ" in html_content or "Clean" in html_content or "0" in html_content
+
+    def test_threat_intel_pipeline_integration(
+        self, real_template_dir: Path, tmp_path: Path, populated_statistics: GeneralStatistics
+    ):
+        """Verifies complete Jinja2 rendering of Threat Intelligence results in the report."""
+        pcap_source = tmp_path / "threat_intel.pcap"
+        pcap_source.touch()
+
+        mock_ioc_result = NormalizedIOCResult(
+            source="VirusTotal",
+            ip="8.8.8.8",
+            is_malicious=True,
+            raw_score=7,
+            categories=("botnet",),
+            confidence=0.90,
+            last_seen=None,
+            queried_at=FIXED_TEST_NOW,
+            provider_error_code=None,
+            provider_error_message=None,
+        )
+
+        threat_intel = {
+            "8.8.8.8": [mock_ioc_result]
+        }
+
+        reporter = r.Reporter(template_dir=real_template_dir)
+        output_report = reporter.generate(
+            statistics=populated_statistics,
+            findings=[],
+            threat_intel=threat_intel,
+            source_file=pcap_source,
+            analysis_duration=1.0,
+        )
+
+        assert output_report.exists()
+        html = output_report.read_text(encoding="utf-8")
+        
+        # Strict validation of Threat Intel rendering
+        assert "Threat Intelligence Sonuçları" in html or "IOC Enrichment Sonuçları" in html
+        assert "8.8.8.8" in html
+        assert "VirusTotal" in html
+        assert "EVET" in html or "Evet" in html
+        assert "90%" in html
+        assert "botnet" in html
+        assert "7" in html

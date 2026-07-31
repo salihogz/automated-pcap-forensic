@@ -2,7 +2,7 @@
 
 Sorumluluk
 ----------
-Bu modül; Statistics, Threat Detector (ve ileride Threat Intel) çıktısını
+Bu modül; Statistics, Threat Detector (ve Threat Intel) çıktısını
 tek dosyalık, tamamen offline çalışan profesyonel bir HTML rapora
 dönüştürür. Görünüm (Jinja2 template) ile üretim mantığı (bu dosya)
 kesin olarak birbirinden ayrılmıştır.
@@ -11,6 +11,7 @@ Mimari
 ------
     GeneralStatistics ─┐
     Sequence[ThreatFinding] ─┼─> Reporter.generate() ─> report.html
+    dict[str, list[NormalizedIOCResult]] ─┤
     ReportMetadata ─┘
                     │
                     ├─ ChartBuilder       (matplotlib -> base64 PNG & TableRow)
@@ -52,6 +53,7 @@ from jinja2.exceptions import TemplateError, UndefinedError
 
 import config
 from modules.models import GeneralStatistics, ThreatFinding, ThreatSeverity
+from modules.threat_intel import NormalizedIOCResult
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +352,7 @@ class Reporter:
         self,
         statistics: GeneralStatistics,
         findings: Sequence[ThreatFinding],
+        threat_intel: dict[str, list[NormalizedIOCResult]],
         source_file: Path,
         analysis_duration: float,
     ) -> Path:
@@ -359,6 +362,7 @@ class Reporter:
             statistics: Statistics modülünün ürettiği genel istatistikler.
             findings: Threat Detector'ın ürettiği bulgular (sıra önemsiz,
                 bu metod severity'ye göre yeniden sıralar).
+            threat_intel: Threat Intel modülünden gelen IOC sonuçları.
             source_file: Analiz edilen PCAP kaynak dosya yolu.
             analysis_duration: Analiz süresi (saniye cinsinden).
 
@@ -397,6 +401,7 @@ class Reporter:
             metadata=metadata,
             statistics=statistics,
             findings=sorted_findings,
+            threat_intel=threat_intel,
             risk_summary=risk_summary,
             charts=charts_list,
         )
@@ -500,6 +505,7 @@ class Reporter:
         metadata: ReportMetadata,
         statistics: GeneralStatistics,
         findings: list[ThreatFinding],
+        threat_intel: dict[str, list[NormalizedIOCResult]],
         risk_summary: RiskSummary,
         charts: list[ChartSection],
     ) -> str:
@@ -510,6 +516,7 @@ class Reporter:
                 metadata=metadata,
                 statistics=statistics,
                 findings=findings,
+                threat_intel=threat_intel,
                 risk_summary=risk_summary,
                 charts=charts,
                 severity_order=_SEVERITY_ORDER,

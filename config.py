@@ -27,6 +27,47 @@ TOP_N_PORTS = 10
 PORT_SCAN_TIME_WINDOW_SECONDS: int = 60
 PORT_SCAN_PORT_THRESHOLD: int = 15
 
+# --------------------------------------------------------------------
+# Threat Intelligence
+# --------------------------------------------------------------------
+# 1. Threat Intelligence Timeout
+THREAT_INTEL_REQUEST_TIMEOUT_SECONDS = 10
+
+# 2. Retry Ayarları
+THREAT_INTEL_MAX_RETRIES = 3
+THREAT_INTEL_BACKOFF_FACTOR_SECONDS = 1
+THREAT_INTEL_RETRY_STATUS_CODES = (
+    429,
+    500,
+    502,
+    503,
+    504,
+)
+
+# 3. HTTP Session Pool
+THREAT_INTEL_POOL_CONNECTIONS = 10
+THREAT_INTEL_POOL_MAXSIZE = 10
+THREAT_INTEL_ALLOWED_METHODS = (
+    "GET",
+    "POST",
+)
+
+# 4. API Base URL'leri
+VIRUSTOTAL_BASE_URL = "https://www.virustotal.com/api/v3"
+ABUSEIPDB_BASE_URL = "https://api.abuseipdb.com/api/v2"
+OTX_BASE_URL = "https://otx.alienvault.com/api/v1"
+URLHAUS_BASE_URL = "https://urlhaus-api.abuse.ch/v1"
+
+# 5. Provider Ayarları
+ABUSEIPDB_MAX_AGE_DAYS = 90
+OTX_MAX_CATEGORY_COUNT = 20
+
+# 6. Environment Variable İsimleri
+VIRUSTOTAL_API_KEY_ENV = "VT_API_KEY"
+ABUSEIPDB_API_KEY_ENV = "ABUSEIPDB_API_KEY"
+OTX_API_KEY_ENV = "OTX_API_KEY"
+URLHAUS_API_KEY_ENV = "URLHAUS_API_KEY"
+
 
 TIMELINE_BUCKET_SECONDS = 1
 for directory in (SAMPLES_DIR, REPORTS_DIR, TEMPLATES_DIR, STATIC_DIR, LOGS_DIR):

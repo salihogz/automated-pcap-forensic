@@ -163,6 +163,30 @@
         font-size: 12px;
     }
 
+    .ti-malicious {
+        color: var(--critical);
+        font-weight: 700;
+    }
+
+    .ti-clean {
+        color: var(--low);
+        font-weight: 700;
+    }
+
+    .ti-error {
+        color: #f59e0b;
+        font-weight: 700;
+    }
+
+    .ti-source {
+        font-size: 12px;
+        color: var(--muted);
+    }
+
+    .ti-score {
+        font-family: Consolas, monospace;
+    }
+
     footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; border-top: 1px solid var(--border); }
 
     @media (max-width: 900px) {
@@ -405,9 +429,134 @@
         {% endif %}
     </section>
 
+    <!-- Threat Intelligence -->
+    <section>
+        <h2>{{ charts|length + 3 }}. Threat Intelligence Sonuçları</h2>
+
+        {% if threat_intel %}
+        <table>
+            <caption>IOC Enrichment Sonuçları</caption>
+
+            <thead>
+            <tr>
+                <th>IP / Özet</th>
+                <th>Sağlayıcı (Provider)</th>
+                <th>Zararlı mı?</th>
+                <th>Ham Skor</th>
+                <th>Güven Oranı</th>
+                <th>Kategoriler</th>
+                <th>Son Görülme</th>
+                <th>Durum</th>
+            </tr>
+            </thead>
+
+            <tbody>
+
+            {% for ip, results in threat_intel.items() %}
+                {% set malicious_count = results | selectattr('is_malicious', 'equalto', true) | list | length %}
+                {% set clean_count = results | selectattr('is_malicious', 'equalto', false) | list | length %}
+                {% set total_count = results | length %}
+
+                {% for result in results %}
+                <tr>
+
+                    {% if loop.first %}
+                    <td rowspan="{{ total_count }}">
+                        <strong>{{ ip }}</strong>
+                        <div class="ti-source" style="margin-top:6px; line-height:1.4;">
+                            Zararlı Olarak İşaretleyen Sağlayıcı:<br>
+                            <strong class="{% if malicious_count > 0 %}ti-malicious{% else %}ti-clean{% endif %}">
+                                {{ malicious_count }} / {{ total_count }}
+                            </strong>
+                        </div>
+                        <div style="margin-top:8px;">
+                            {% if malicious_count == total_count and total_count > 0 %}
+                                <span class="badge CRITICAL" style="font-size:9px;">CONSENSUS: MALICIOUS</span>
+                            {% elif malicious_count > 0 %}
+                                <span class="badge HIGH" style="font-size:9px;">CONSENSUS: MIXED</span>
+                            {% elif clean_count > 0 %}
+                                <span class="badge LOW" style="font-size:9px;">CONSENSUS: CLEAN</span>
+                            {% else %}
+                                <span class="badge INFO" style="font-size:9px;">CONSENSUS: UNKNOWN</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                    {% endif %}
+
+                    <td>{{ result.source }}</td>
+
+                    <td>
+                        {% if result.is_malicious is true %}
+                            <span class="ti-malicious">EVET</span>
+                        {% elif result.is_malicious is false %}
+                            <span class="ti-clean">HAYIR</span>
+                        {% else %}
+                            BİLİNMİYOR
+                        {% endif %}
+                    </td>
+
+                    <td class="ti-score">
+                        {{ result.raw_score if result.raw_score is not none else "-" }}
+                    </td>
+
+                    <td>
+                        {% if result.confidence is not none %}
+                            {{ "%.0f%%"|format(result.confidence * 100) }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if result.categories %}
+                            <div class="ti-source">
+                                {{ result.categories | join(", ") }}
+                            </div>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if result.last_seen %}
+                            {% if result.last_seen.strftime is defined %}
+                                {{ result.last_seen.strftime('%Y-%m-%d %H:%M:%S UTC') }}
+                            {% else %}
+                                {{ result.last_seen }}
+                            {% endif %}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        {% if result.provider_error_message %}
+                            <span class="ti-error" title="{{ result.provider_error_message }}">HATA</span>
+                            <div class="ti-source">{{ result.provider_error_message }}</div>
+                        {% else %}
+                            <span class="ti-clean">BAŞARILI</span>
+                        {% endif %}
+                    </td>
+
+                </tr>
+                {% endfor %}
+            {% endfor %}
+
+            </tbody>
+        </table>
+
+        {% else %}
+
+        <div class="empty-state">
+            Threat Intelligence sonucu bulunmamaktadır.
+        </div>
+
+        {% endif %}
+    </section>
+
     <!-- 4. Genel Risk Özeti -->
     <section>
-        <h2>{{ charts|length + 3 }}. Genel Risk Özeti</h2>
+        <h2>{{ charts|length + 4 }}. Genel Risk Özeti</h2>
         <div class="risk-banner {{ risk_summary.risk_class }}">
             <div class="risk-header">
                 <div>
