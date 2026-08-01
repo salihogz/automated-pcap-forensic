@@ -3,6 +3,7 @@ Automated PCAP Forensic Analysis Tool - CLI Entry Point
 """
 
 import argparse
+import ipaddress
 import logging
 import sys
 from pathlib import Path
@@ -38,6 +39,24 @@ def setup_logging(verbose: bool = False) -> None:
         ],
         force=True,
     )
+
+
+def _is_public_ip(ip_str: str) -> bool:
+    """IP, dış Threat Intel sağlayıcılarına sorgulamaya değer (genel/routable) mi?
+
+    Private (RFC1918), loopback, link-local, multicast ve diğer reserved
+    aralıklar dış TI servisleri için anlamlı bir sonuç üretmez: bazı
+    sağlayıcılar bunları HTTP 400 ile reddeder (bkz. OTX), bazıları ise
+    "veri yok" durumunu sessizce "temiz" ile karıştırılabilecek bir sonuca
+    çevirir. İkisi de raporu ya gereksiz hata satırlarıyla ya da yanıltıcı
+    "BAŞARILI/CLEAN" satırlarıyla kirletir. Bu yüzden private IP'ler dış
+    sorgudan tamamen hariç tutulur; iç ağ analizi zaten Threat Detector
+    kurallarının (port scan vb.) sorumluluğundadır.
+    """
+    try:
+        return ipaddress.ip_address(ip_str).is_global
+    except ValueError:
+        return False
 
 
 def print_banner() -> None:
@@ -111,13 +130,22 @@ def main() -> int:
             if ip is not None
         }
 
+        public_ips = sorted(ip for ip in unique_ips if _is_public_ip(ip))
+        skipped_ip_count = len(unique_ips) - len(public_ips)
+        if skipped_ip_count:
+            logger.info(
+                "Threat Intelligence: %d private/rezerve IP sorgu dışında bırakıldı "
+                "(dış TI sağlayıcıları için anlamlı değil).",
+                skipped_ip_count,
+            )
+
         session = build_default_session()
         providers = build_default_providers(session)
         threat_intel = ThreatIntelService(providers)
 
         threat_intel_results: dict[str, list[NormalizedIOCResult]] = {}
 
-        for ip in sorted(unique_ips):
+        for ip in public_ips:
             threat_intel_results[ip] = threat_intel.enrich(ip)
 
         session.close()

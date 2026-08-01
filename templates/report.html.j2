@@ -366,7 +366,10 @@
 
     <!-- 3. Tehdit Bulguları -->
     <section>
-        <h2>{{ charts|length + 2 }}. Tehdit Bulguları ({{ findings|length }})</h2>
+        <h2>
+            {{ charts|length + 2 }}. Tehdit Bulguları
+            ({{ findings|length }} desen{% if risk_summary.total_findings != findings|length %}, toplam {{ risk_summary.total_findings }} olay{% endif %})
+        </h2>
         {% if findings %}
         <table>
             <caption>Tespit Edilen Adli Tehdit Bulguları Listesi</caption>

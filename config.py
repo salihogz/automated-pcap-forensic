@@ -70,6 +70,14 @@ URLHAUS_API_KEY_ENV = "URLHAUS_API_KEY"
 
 
 TIMELINE_BUCKET_SECONDS = 1
+
+# Zaman çizelgesi tablosu, uzun yakalamalarda (örn. saniye başına 1 bucket
+# ile 5+ dakikalık capture) yüzlerce satıra çıkabilir. Grafik zaten tam
+# çözünürlükle çizilir; tablo ise analist okunabilirliği için bu satır
+# sayısını aşarsa otomatik olarak daha geniş zaman dilimlerine (bucket'lara)
+# yeniden örneklenir (bkz. reporter.ChartBuilder._build_timeline_table).
+TIMELINE_TABLE_MAX_ROWS = 40
+
 for directory in (SAMPLES_DIR, REPORTS_DIR, TEMPLATES_DIR, STATIC_DIR, LOGS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 

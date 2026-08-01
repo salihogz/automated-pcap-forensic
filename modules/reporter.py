@@ -36,12 +36,14 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import math
 import sys
+from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import matplotlib
 
@@ -192,6 +194,130 @@ def compute_risk_summary(findings: Sequence[ThreatFinding]) -> RiskSummary:
     )
 
 
+# Bulgu (evidence) sözlüklerinde epoch/unix zaman damgası taşıdığı bilinen
+# anahtarlar. Bu anahtarların değerleri, rapora yazılmadan önce insan
+# tarafından okunabilir bir tarihe çevrilir. Yeni bir tespit kuralı evidence
+# içine zaman damgası koyarsa, anahtarını buraya eklemesi yeterlidir.
+_EVIDENCE_TIME_KEYS: Final[frozenset[str]] = frozenset(
+    {"window_start_time", "window_end_time", "ilk_gorulme", "son_gorulme"}
+)
+
+
+def _format_timestamp_value(value: Any) -> str:
+    """Epoch (float/int) veya datetime değerini 'YYYY-MM-DD HH:MM:SS UTC' biçimine çevirir.
+
+    Ayrıştırılamayan/None değerler için ham HTML'e çirkin bir epoch float
+    yazmak yerine güvenli bir varsayılan döner (Fail Soft: rapor üretimi
+    tek bir bozuk zaman damgası yüzünden durmamalıdır).
+    """
+    if value is None:
+        return "-"
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    try:
+        return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+    except (TypeError, ValueError, OSError):
+        return str(value)
+
+
+def _group_recurring_findings(findings: Sequence[ThreatFinding]) -> list[ThreatFinding]:
+    """Aynı (rule_id, source, destination) üçlüsü için tekrar eden bulguları
+    rapor GÖRÜNÜMÜNDE tek satıra indirger.
+
+    Neden gerekli: Kayan pencere tabanlı kurallar (Port Scan ve benzerleri),
+    bir saldırı/tarama devam ettiği sürece art arda birçok ayrı ThreatFinding
+    üretir (her biri kendi zaman penceresinin geçerli kanıtıdır). Bu, adli
+    açıdan doğrudur ama aynı satırın onlarca kez tekrarlandığı bir raporu
+    analist için okunaksız hale getirir.
+
+    Saf fonksiyon: girdiyi değiştirmez, `dataclasses.replace` ile SADECE
+    description/evidence alanlarını bu bulgu grubunu özetleyecek şekilde
+    zenginleştirilmiş YENİ ThreatFinding nesneleri üretir; hiçbir orijinal
+    alan icat edilmez veya silinmez (chain of custody korunur).
+
+    ÖNEMLİ: Bu fonksiyonun çıktısı SADECE raporun "Tehdit Bulguları" tablosu
+    için kullanılmalıdır. Risk skoru (`compute_risk_summary`) her zaman
+    orijinal, gruplanmamış bulgu listesiyle hesaplanmalıdır; aksi halde 8
+    ayrı tespit tek bir CRITICAL bulgu gibi görünüp risk skorunu yanlışlıkla
+    düşürür.
+    """
+    groups: dict[tuple[str, str, str | None], list[ThreatFinding]] = defaultdict(list)
+    order: list[tuple[str, str, str | None]] = []
+
+    for finding in findings:
+        key = (finding.rule_id, finding.source, finding.destination)
+        if key not in groups:
+            order.append(key)
+        groups[key].append(finding)
+
+    result: list[ThreatFinding] = []
+    for key in order:
+        group = groups[key]
+        if len(group) == 1:
+            result.append(group[0])
+            continue
+
+        group_sorted = sorted(group, key=lambda f: f.timestamp or 0)
+        representative = group_sorted[-1]
+        first_seen = group_sorted[0].timestamp
+        last_seen = group_sorted[-1].timestamp
+        occurrence_count = len(group_sorted)
+
+        merged_evidence = dict(representative.evidence)
+        merged_evidence["tekrar_sayisi"] = occurrence_count
+        merged_evidence["ilk_gorulme"] = first_seen
+        merged_evidence["son_gorulme"] = last_seen
+
+        merged_description = (
+            f"{representative.description} Bu davranış aynı kaynak-hedef çifti "
+            f"için {occurrence_count} ayrı zaman penceresinde tekrar tespit edildi "
+            f"(ilk: {_format_timestamp_value(first_seen)}, "
+            f"son: {_format_timestamp_value(last_seen)})."
+        )
+
+        result.append(
+            replace(representative, description=merged_description, evidence=merged_evidence)
+        )
+
+    return result
+
+
+def _prepare_findings_for_template(findings: Sequence[ThreatFinding]) -> list[dict[str, Any]]:
+    """ThreatFinding nesnelerini şablonun (report.html.j2) beklediği, insan
+    tarafından okunabilir sunum alanlarıyla (formatted_timestamp, formatlanmış
+    kanıt zaman damgaları) zenginleştirilmiş salt-okunur dict listesine
+    dönüştürür.
+
+    Ham ThreatFinding/dataclass nesneleri bu dönüşümden ETKİLENMEZ; bu
+    fonksiyon yalnızca View katmanı için ayrı bir temsil üretir (Presentation
+    != Domain Model ayrımı).
+    """
+    rows: list[dict[str, Any]] = []
+    for finding in findings:
+        evidence = dict(finding.evidence)
+        for key in _EVIDENCE_TIME_KEYS:
+            if key in evidence:
+                evidence[key] = _format_timestamp_value(evidence[key])
+
+        rows.append(
+            {
+                "rule_id": finding.rule_id,
+                "title": finding.title,
+                "severity": finding.severity,
+                "description": finding.description,
+                "evidence": evidence,
+                "source": finding.source,
+                "destination": finding.destination,
+                "timestamp": finding.timestamp,
+                "formatted_timestamp": _format_timestamp_value(finding.timestamp),
+            }
+        )
+    return rows
+
+
 class ChartBuilder:
     """İstatistik verilerinden base64 kodlu PNG grafikler ve detay tabloları inşa eder.
 
@@ -294,11 +420,42 @@ class ChartBuilder:
         ax.set_xticklabels([formatted_labels[i] for i in tick_positions], rotation=45, ha="right")
         fig.tight_layout()
 
-        table_data = [
-            TableRow(label=time_label, value=f"{count:,}")
-            for time_label, (_, count) in zip(formatted_labels, items, strict=True)
-        ]
+        table_data = self._build_timeline_table(items, formatted_labels)
         return self._to_base64(fig), table_data
+
+    @staticmethod
+    def _build_timeline_table(
+        items: list[tuple[float, int]], formatted_labels: list[str]
+    ) -> list[TableRow]:
+        """Zaman çizelgesi analist tablosunu üretir.
+
+        Bucket sayısı `config.TIMELINE_TABLE_MAX_ROWS` altındaysa birebir
+        (saniye/bucket başına bir satır) gösterilir. Üzerindeyse -uzun
+        capture'larda tablonun yüzlerce satıra çıkıp raporu kullanılamaz hale
+        getirmemesi için- ardışık bucket'lar otomatik olarak daha geniş zaman
+        dilimlerinde toplanır (sum). Grafik bu yeniden örneklemeden etkilenmez,
+        tam çözünürlükle çizilmeye devam eder.
+        """
+        max_rows = config.TIMELINE_TABLE_MAX_ROWS
+        total_buckets = len(items)
+
+        if total_buckets <= max_rows:
+            return [
+                TableRow(label=label, value=f"{count:,}")
+                for label, (_, count) in zip(formatted_labels, items, strict=True)
+            ]
+
+        chunk_size = math.ceil(total_buckets / max_rows)
+        table_data: list[TableRow] = []
+        for start in range(0, total_buckets, chunk_size):
+            end = min(start + chunk_size, total_buckets)
+            chunk_total = sum(count for _, count in items[start:end])
+            start_label = formatted_labels[start]
+            end_label = formatted_labels[end - 1]
+            label = start_label if start_label == end_label else f"{start_label} – {end_label}"
+            table_data.append(TableRow(label=label, value=f"{chunk_total:,}"))
+
+        return table_data
 
     @staticmethod
     def _to_base64(fig: plt.Figure) -> str:
@@ -393,14 +550,26 @@ class Reporter:
         )
         self._validate_inputs(statistics, metadata, output_path)
 
-        sorted_findings = self._sort_findings_by_severity(findings)
+        # Risk skoru DAİMA ham, gruplanmamış bulgu listesinden hesaplanır;
+        # aksi halde tekrarlayan tespitler tek bir olay gibi sayılıp skor
+        # yanlışlıkla düşer.
         risk_summary = compute_risk_summary(findings)
+
+        # Rapor GÖRÜNÜMÜ için: aynı (rule_id, source, destination) için
+        # tekrar eden bulgular tek satırda özetlenir, ardından severity'ye
+        # göre sıralanır ve şablonun beklediği (formatted_timestamp vb.)
+        # sunum alanlarıyla zenginleştirilir.
+        display_findings = self._sort_findings_by_severity(
+            _group_recurring_findings(findings)
+        )
+        findings_rows = _prepare_findings_for_template(display_findings)
+
         charts_list = self._build_charts_list(statistics)
 
         html = self._render(
             metadata=metadata,
             statistics=statistics,
-            findings=sorted_findings,
+            findings=findings_rows,
             threat_intel=threat_intel,
             risk_summary=risk_summary,
             charts=charts_list,
@@ -408,9 +577,10 @@ class Reporter:
         self._write(html, output_path)
 
         logger.info(
-            "Rapor başarıyla oluşturuldu: %s (%d bulgu, risk seviyesi: %s)",
+            "Rapor başarıyla oluşturuldu: %s (%d bulgu, %d satırda gruplandı, risk seviyesi: %s)",
             output_path,
             len(findings),
+            len(findings_rows),
             risk_summary.risk_level,
         )
         return output_path
@@ -504,7 +674,7 @@ class Reporter:
         *,
         metadata: ReportMetadata,
         statistics: GeneralStatistics,
-        findings: list[ThreatFinding],
+        findings: list[dict[str, Any]],
         threat_intel: dict[str, list[NormalizedIOCResult]],
         risk_summary: RiskSummary,
         charts: list[ChartSection],
