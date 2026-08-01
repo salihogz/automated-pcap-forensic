@@ -18,7 +18,6 @@ pandas==3.0.3
 pillow==12.3.0
 pycparser==3.0
 pyparsing==3.3.2
-pyshark==0.6
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 requests==2.34.2
@@ -26,4 +25,7 @@ scapy==2.7.0
 six==1.17.0
 termcolor==3.3.0
 urllib3==2.7.0
+beautifulsoup4
 pytest
+pytest-cov
+ruff

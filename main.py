@@ -129,6 +129,8 @@ def main() -> int:
             len(threat_intel_results),
         )
 
+        reporter = Reporter()
+
         if args.verbose:
             print("\n--- THREAT INTELLIGENCE ---")
 
@@ -144,12 +146,12 @@ def main() -> int:
 
         # 5. HTML Report Generation
         report_path = reporter.generate(
-    statistics=stats,
-    findings=findings,
-    threat_intel=threat_intel_results,
-    source_file=target_path,
-    analysis_duration=duration,
-)
+            statistics=stats,
+            findings=findings,
+            threat_intel=threat_intel_results,
+            source_file=target_path,
+            analysis_duration=duration,
+        )
         logger.info("HTML raporu oluşturuldu: %s", report_path)
 
         logger.info(
