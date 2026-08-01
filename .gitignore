@@ -1,11 +1,47 @@
+# ==========================
+# Virtual Environments
+# ==========================
 venv/
-__pycache__/
-*.pyc
+.venv/
 
+# ==========================
+# Python
+# ==========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# ==========================
+# Environment Variables
+# ==========================
 .env
 
-reports/
-samples/
+# ==========================
+# Test & Coverage
+# ==========================
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-.vscode/
+# ==========================
+# Logs & Reports
+# ==========================
 logs/
+reports/
+
+# ==========================
+# IDE
+# ==========================
+.vscode/
+.idea/
+
+# ==========================
+# Operating System Files
+# ==========================
+.DS_Store
+Thumbs.db
+
+samples/*.pcap
+samples/*.pcapng
