@@ -9,6 +9,7 @@ from pathlib import Path
 
 # Scapy standart katmanları
 from scapy.all import ARP, DHCP, DNS, ICMP, IP, NTP, SNMP, TCP, UDP, IPv6, PcapReader
+from scapy.error import Scapy_Exception
 from scapy.packet import Packet
 
 # TLS katmanını güvenli içe aktarma
@@ -179,9 +180,9 @@ class PCAPParser:
                     packet_count += 1
                     try:
                         parsed_packets.append(self._parse_single_packet(packet, packet_count))
-                    except Exception as pkt_err:
+                    except Exception as pkt_err:  # noqa: BLE001
                         logger.warning("Paket #%d işlenirken hata oluştu, atlanıyor: %s", packet_count, pkt_err)
-        except Exception as stream_err:
+        except (Scapy_Exception, OSError, ValueError, TypeError) as stream_err:
             logger.error("PCAP okuma akışı kritik hatayla kesildi: %s", stream_err)
             raise RuntimeError(f"PCAP okuma hatası: {stream_err}") from stream_err
 

@@ -39,7 +39,7 @@ import logging
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
@@ -277,7 +277,7 @@ class ChartBuilder:
 
         items = sorted(timeline.items())
         formatted_labels = [
-            datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+            datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S")
             for ts, _ in items
         ]
         values = [count for _, count in items]

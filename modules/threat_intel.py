@@ -28,7 +28,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Final
+from typing import Any
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -55,6 +55,7 @@ class ProviderErrorCode(str, Enum):
     REQUEST_ERROR = "REQUEST_ERROR"
     PARSE_ERROR = "PARSE_ERROR"
     UNEXPECTED_STATUS = "UNEXPECTED_STATUS"
+    UNKNOWN_ERROR = "UNKNOWN_ERROR"
 
 
 # ======================================================================
@@ -100,6 +101,11 @@ class NormalizedIOCResult:
     provider_error_code: ProviderErrorCode | None
     provider_error_message: str | None
     confidence: float | None
+
+    @property
+    def error_message(self) -> str | None:
+        """Geriye dönük test uyumluluğu için provider_error_message property'si."""
+        return self.provider_error_message
 
 
 # ======================================================================
@@ -151,7 +157,7 @@ def _parse_urlhaus_datetime(value: Any) -> datetime | None:
     if not value or not isinstance(value, str):
         return None
     try:
-        parsed = datetime.strptime(value.strip(), "%Y-%m-%d %H:%M:%S UTC")
+        parsed = datetime.strptime(value.strip(), "%Y-%m-%d %H:%M:%S UTC")  # noqa: DTZ007
         return parsed.replace(tzinfo=timezone.utc)
     except ValueError:
         logger.warning("URLHaus tarih formatı ayrıştırılamadı: %r", value)
@@ -224,16 +230,11 @@ def _extract_error_detail(response: requests.Response) -> str:
 class ThreatIntelProvider(ABC):
     """Tüm Threat Intel provider'larının uyması gereken ortak sözleşme."""
 
-    NAME: Final[str] = "Unknown"
+    name: str = "Unknown"
 
     def __init__(self, session: requests.Session, api_key: str | None) -> None:
         self._session = session
         self._api_key = api_key
-
-    @property
-    def name(self) -> str:
-        """Provider'ın görünen adı."""
-        return self.NAME
 
     def is_configured(self) -> bool:
         """API anahtarı tanımlı mı? Tanımlı değilse provider sorgulanmaz."""
@@ -284,7 +285,7 @@ class ThreatIntelProvider(ABC):
             return None, ProviderErrorCode.CONNECTION_ERROR, "Connection failed"
         except requests.exceptions.RequestException as exc:
             self._log_warning("Beklenmeyen istek hatası: %s", exc)
-            return None, ProviderErrorCode.REQUEST_ERROR, f"Request exception: {type(exc).__name__}"
+            return None, ProviderErrorCode.REQUEST_ERROR, f"Request exception: {exc}"
 
     def _build_error_result(
         self,
@@ -316,7 +317,7 @@ class ThreatIntelProvider(ABC):
 class VirusTotalProvider(ThreatIntelProvider):
     """Sadece VirusTotal API'sini bilir (IP reputation, v3 endpoint)."""
 
-    NAME: Final[str] = "VirusTotal"
+    name: str = "VirusTotal"
 
     def _extract_provider_error(self, response: requests.Response) -> str:
         """VirusTotal v3 hata formatı: {"error": {"code": "...", "message": "..."}}"""
@@ -378,7 +379,7 @@ class VirusTotalProvider(ThreatIntelProvider):
             return self._build_error_result(
                 ip_str,
                 ProviderErrorCode.PARSE_ERROR,
-                "Schema parse error",
+                f"JSON parse error: {exc}",
                 queried_at,
             )
 
@@ -386,7 +387,7 @@ class VirusTotalProvider(ThreatIntelProvider):
 class AbuseIPDBProvider(ThreatIntelProvider):
     """Sadece AbuseIPDB API'sini bilir (IP check endpoint)."""
 
-    NAME: Final[str] = "AbuseIPDB"
+    name: str = "AbuseIPDB"
 
     def _extract_provider_error(self, response: requests.Response) -> str:
         """AbuseIPDB hata formatı: {"errors": [{"detail": "...", "status": 401}]}"""
@@ -459,7 +460,7 @@ class AbuseIPDBProvider(ThreatIntelProvider):
             return self._build_error_result(
                 ip_str,
                 ProviderErrorCode.PARSE_ERROR,
-                "Schema parse error",
+                f"JSON parse error: {exc}",
                 queried_at,
             )
 
@@ -467,7 +468,7 @@ class AbuseIPDBProvider(ThreatIntelProvider):
 class AlienVaultOTXProvider(ThreatIntelProvider):
     """Sadece AlienVault OTX API'sini bilir (IPv4/IPv6 general endpoint)."""
 
-    NAME: Final[str] = "AlienVault OTX"
+    name: str = "AlienVault OTX"
 
     def _extract_provider_error(self, response: requests.Response) -> str:
         """AlienVault OTX hata formatı: {"detail": "..."} veya {"message": "..."}"""
@@ -533,7 +534,7 @@ class AlienVaultOTXProvider(ThreatIntelProvider):
             return self._build_error_result(
                 ip_str,
                 ProviderErrorCode.PARSE_ERROR,
-                "Schema parse error",
+                f"JSON parse error: {exc}",
                 queried_at,
             )
 
@@ -541,7 +542,7 @@ class AlienVaultOTXProvider(ThreatIntelProvider):
 class URLHausProvider(ThreatIntelProvider):
     """Sadece URLHaus API'sini bilir (host endpoint)."""
 
-    NAME: Final[str] = "URLHaus"
+    name: str = "URLHaus"
 
     def _extract_provider_error(self, response: requests.Response) -> str:
         """URLHaus özel hata ayrıştırıcısı: {"query_status": "...", "system_error": "..."}"""
@@ -630,7 +631,7 @@ class URLHausProvider(ThreatIntelProvider):
             return self._build_error_result(
                 ip_str,
                 ProviderErrorCode.PARSE_ERROR,
-                "Schema parse error",
+                f"JSON parse error: {exc}",
                 queried_at,
             )
 
@@ -665,9 +666,29 @@ class ThreatIntelService:
                 )
                 continue
 
-            result = provider.query(validated_ip)
-            if result is not None:
-                results.append(result)
+            try:
+                result = provider.query(validated_ip)
+                if result is not None:
+                    results.append(result)
+            except Exception as exc:
+                logger.exception(
+                    "[%s] Provider sorgusu sırasında beklenmeyen hata oluştu.",
+                    provider.name,
+                )
+                results.append(
+                    NormalizedIOCResult(
+                        source=provider.name,
+                        ip=str(validated_ip),
+                        is_malicious=None,
+                        raw_score=None,
+                        categories=(),
+                        last_seen=None,
+                        queried_at=_utc_now(),
+                        provider_error_code=ProviderErrorCode.UNKNOWN_ERROR,
+                        provider_error_message=f"Unexpected error: {exc}",
+                        confidence=None,
+                    )
+                )
 
         return results
 

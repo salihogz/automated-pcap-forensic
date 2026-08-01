@@ -180,8 +180,8 @@ def main() -> int:
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error("Analiz başarısız oldu: %s", e)
         return 1
-    except Exception as e:
-        logger.exception("Beklenmeyen bir hata oluştu: %s", e)
+    except Exception:
+        logger.exception("Beklenmeyen bir hata oluştu.")
         return 1
 
 
