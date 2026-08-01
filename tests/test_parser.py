@@ -19,7 +19,6 @@ from scapy.utils import wrpcap
 import config
 from modules.parser import PCAPParser
 
-
 # ---------------------------------------------------------------------------
 # Packet Construction Helpers
 # ---------------------------------------------------------------------------

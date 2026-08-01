@@ -141,9 +141,15 @@ class TestReporterIsolatedUnitMethods:
         assert target_path.read_text(encoding="utf-8") == content
 
         # Test write failure wrapping strictly to ReportGenerationError
-        with patch.object(Path, "write_text", side_effect=OSError("Permission denied")):
-            with pytest.raises(r.ReportGenerationError):
-                r.Reporter._write(content, target_path)
+        with (
+            patch.object(
+                Path,
+                "write_text",
+                side_effect=OSError("Permission denied"),
+            ),
+            pytest.raises(r.ReportGenerationError),
+        ):
+            r.Reporter._write(content, target_path)
 
     def test_render_method_template_not_found_raises_exception(self, tmp_path: Path):
         """Validates that _render raises ReportGenerationError when template file is missing."""

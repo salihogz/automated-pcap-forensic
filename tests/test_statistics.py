@@ -1,6 +1,6 @@
+import config
 from modules.models import PacketInfo
 from modules.statistics import build_general_statistics
-import config
 
 
 def _make_packet(epoch_time, src_ip, dst_ip, length, transport="TCP",
