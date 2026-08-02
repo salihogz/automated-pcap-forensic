@@ -45,6 +45,10 @@ type IPAddressType = ipaddress.IPv4Address | ipaddress.IPv6Address
 # CONSTANTS & ENUMS
 # ======================================================================
 
+# Süreç optimizasyon ayarları (Global varsayılanlar)
+THREAT_INTEL_REQUEST_TIMEOUT_SECONDS = 3  # Timeout 10 sn yerine 3 sn
+THREAT_INTEL_MAX_RETRIES = 1  # Retry sayısı 3 yerine 1
+
 
 class ProviderErrorCode(str, Enum):
     """Provider hataları için standartlaştırılmış hata kodları."""
@@ -260,11 +264,12 @@ class ThreatIntelProvider(ABC):
         **kwargs: Any,
     ) -> tuple[requests.Response | None, ProviderErrorCode | None, str | None]:
         """Ortak, güvenli HTTP çağrısı."""
+        timeout = getattr(config, "THREAT_INTEL_REQUEST_TIMEOUT_SECONDS", THREAT_INTEL_REQUEST_TIMEOUT_SECONDS)
         try:
             response = self._session.request(
                 method,
                 url,
-                timeout=config.THREAT_INTEL_REQUEST_TIMEOUT_SECONDS,
+                timeout=timeout,
                 verify=True,
                 **kwargs,
             )
@@ -652,10 +657,18 @@ class ThreatIntelService:
         if not providers:
             raise ValueError("ThreatIntelService en az bir provider gerektirir.")
         self._providers = providers
+        self._cache: dict[str, list[NormalizedIOCResult]] = {}
 
     def enrich(self, ip: str) -> list[NormalizedIOCResult]:
-        """Verilen IP'yi tüm yapılandırılmış provider'lara sorgular."""
+        """Verilen IP'yi tüm yapılandırılmış provider'lara sorgular (Cache destekli)."""
         validated_ip = self._validate_ip(ip)
+        ip_str = str(validated_ip)
+
+        # 4. İyileştirme: Önbellekte varsa doğrudan döndür (Mükerrer sorgu önleme)
+        if ip_str in self._cache:
+            logger.debug("Önbellekten döndürülüyor: %s", ip_str)
+            return self._cache[ip_str]
+
         results: list[NormalizedIOCResult] = []
 
         for provider in self._providers:
@@ -678,7 +691,7 @@ class ThreatIntelService:
                 results.append(
                     NormalizedIOCResult(
                         source=provider.name,
-                        ip=str(validated_ip),
+                        ip=ip_str,
                         is_malicious=None,
                         raw_score=None,
                         categories=(),
@@ -690,7 +703,26 @@ class ThreatIntelService:
                     )
                 )
 
+        self._cache[ip_str] = results
         return results
+
+    def enrich_findings_only(self, findings: list[Any]) -> dict[str, list[NormalizedIOCResult]]:
+        """5. İyileştirme: Sadece bulgularda geçen (saldırgan/şüpheli) IP adreslerini hedefler."""
+        target_ips: set[str] = set()
+
+        for finding in findings:
+            # Bulgu nesnesinde tanımlı IP attributes okunur (src_ip, dst_ip, ip, target_ip vb.)
+            for attr in ("src_ip", "dst_ip", "ip", "target_ip", "source_ip"):
+                val = getattr(finding, attr, None)
+                if val and isinstance(val, str):
+                    try:
+                        if ipaddress.ip_address(val).is_global:
+                            target_ips.add(val)
+                    except ValueError:
+                        pass
+
+        logger.info("Bulgulardan tespit edilen %d adet public IP sorgulanıyor...", len(target_ips))
+        return {ip: self.enrich(ip) for ip in target_ips}
 
     @staticmethod
     def _validate_ip(ip: str) -> IPAddressType:
@@ -716,11 +748,13 @@ def build_default_session(
     actual_maxsize = pool_maxsize if pool_maxsize is not None else config.THREAT_INTEL_POOL_MAXSIZE
     actual_methods = allowed_methods if allowed_methods is not None else config.THREAT_INTEL_ALLOWED_METHODS
 
+    max_retries = getattr(config, "THREAT_INTEL_MAX_RETRIES", THREAT_INTEL_MAX_RETRIES)
+
     retry_strategy = Retry(
-        total=config.THREAT_INTEL_MAX_RETRIES,
-        connect=config.THREAT_INTEL_MAX_RETRIES,
-        read=config.THREAT_INTEL_MAX_RETRIES,
-        status=config.THREAT_INTEL_MAX_RETRIES,
+        total=max_retries,
+        connect=max_retries,
+        read=max_retries,
+        status=max_retries,
         backoff_factor=config.THREAT_INTEL_BACKOFF_FACTOR_SECONDS,
         status_forcelist=config.THREAT_INTEL_RETRY_STATUS_CODES,
         allowed_methods=frozenset(actual_methods),

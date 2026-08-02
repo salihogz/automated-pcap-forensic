@@ -3,6 +3,7 @@ Automated PCAP Forensic Analysis Tool - CLI Entry Point
 """
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import logging
 import sys
@@ -145,8 +146,13 @@ def main() -> int:
 
         threat_intel_results: dict[str, list[NormalizedIOCResult]] = {}
 
-        for ip in public_ips:
-            threat_intel_results[ip] = threat_intel.enrich(ip)
+        # Threat Intelligence sorgularını ThreadPoolExecutor ile paralel çalıştırma
+        if public_ips:
+            max_workers = min(10, len(public_ips))  # İsteğe bağlı olarak worker sayısını sınırlayabilirsiniz
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = executor.map(threat_intel.enrich, public_ips)
+                for ip, result in zip(public_ips, results):
+                    threat_intel_results[ip] = result
 
         session.close()
 
