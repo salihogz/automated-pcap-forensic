@@ -31,10 +31,10 @@ PORT_SCAN_PORT_THRESHOLD: int = 15
 # Threat Intelligence
 # --------------------------------------------------------------------
 # 1. Threat Intelligence Timeout
-THREAT_INTEL_REQUEST_TIMEOUT_SECONDS = 10
+THREAT_INTEL_REQUEST_TIMEOUT_SECONDS = 3
 
 # 2. Retry Ayarları
-THREAT_INTEL_MAX_RETRIES = 3
+THREAT_INTEL_MAX_RETRIES = 1
 THREAT_INTEL_BACKOFF_FACTOR_SECONDS = 1
 THREAT_INTEL_RETRY_STATUS_CODES = (
     429,

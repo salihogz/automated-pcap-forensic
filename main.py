@@ -40,6 +40,10 @@ def setup_logging(verbose: bool = False) -> None:
         ],
         force=True,
     )
+    # Scapy'nin SSLv2 katmanındaki "Unknown cipher suite ..." gürültüsünü sustur.
+    # Bu bir hata değil, pcap içindeki eski/rastgele cipher-suite ID'lerinden kaynaklanıyor.
+    logging.getLogger("scapy").setLevel(logging.ERROR)
+    logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 
 def _is_public_ip(ip_str: str) -> bool:

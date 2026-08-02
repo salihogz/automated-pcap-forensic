@@ -45,10 +45,6 @@ type IPAddressType = ipaddress.IPv4Address | ipaddress.IPv6Address
 # CONSTANTS & ENUMS
 # ======================================================================
 
-# Süreç optimizasyon ayarları (Global varsayılanlar)
-THREAT_INTEL_REQUEST_TIMEOUT_SECONDS = 3  # Timeout 10 sn yerine 3 sn
-THREAT_INTEL_MAX_RETRIES = 1  # Retry sayısı 3 yerine 1
-
 
 class ProviderErrorCode(str, Enum):
     """Provider hataları için standartlaştırılmış hata kodları."""
@@ -264,7 +260,7 @@ class ThreatIntelProvider(ABC):
         **kwargs: Any,
     ) -> tuple[requests.Response | None, ProviderErrorCode | None, str | None]:
         """Ortak, güvenli HTTP çağrısı."""
-        timeout = getattr(config, "THREAT_INTEL_REQUEST_TIMEOUT_SECONDS", THREAT_INTEL_REQUEST_TIMEOUT_SECONDS)
+        timeout = config.THREAT_INTEL_REQUEST_TIMEOUT_SECONDS
         try:
             response = self._session.request(
                 method,
@@ -748,7 +744,7 @@ def build_default_session(
     actual_maxsize = pool_maxsize if pool_maxsize is not None else config.THREAT_INTEL_POOL_MAXSIZE
     actual_methods = allowed_methods if allowed_methods is not None else config.THREAT_INTEL_ALLOWED_METHODS
 
-    max_retries = getattr(config, "THREAT_INTEL_MAX_RETRIES", THREAT_INTEL_MAX_RETRIES)
+    max_retries = config.THREAT_INTEL_MAX_RETRIES
 
     retry_strategy = Retry(
         total=max_retries,

@@ -410,11 +410,11 @@
                         <div class="finding-desc">{{ finding.description }}</div>
                     </td>
                     <td>
-                        {% if finding.evidence %}
+                        {% if finding.evidence_display %}
                         <div class="evidence-box">
-                            {% for key, val in finding.evidence.items() %}
+                            {% for label, val in finding.evidence_display %}
                             <div class="evidence-row">
-                                <span class="evidence-key">{{ key }}:</span>
+                                <span class="evidence-key">{{ label }}:</span>
                                 <span class="evidence-val">{{ val }}</span>
                             </div>
                             {% endfor %}

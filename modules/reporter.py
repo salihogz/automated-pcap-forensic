@@ -43,7 +43,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Callable, Final
 
 import matplotlib
 
@@ -202,6 +202,18 @@ _EVIDENCE_TIME_KEYS: Final[frozenset[str]] = frozenset(
     {"window_start_time", "window_end_time", "ilk_gorulme", "son_gorulme"}
 )
 
+_EVIDENCE_LABELS: Final[dict[str, str]] = {
+    "distinct_port_count": "Farklı Port Sayısı",
+    "threshold": "Eşik Değeri",
+    "time_window_seconds": "Zaman Penceresi (sn)",
+    "scanned_ports": "Taranan Portlar",
+    "window_start_time": "Pencere Başlangıcı",
+    "window_end_time": "Pencere Bitişi",
+    "tekrar_sayisi": "Tekrar Sayısı",
+    "ilk_gorulme": "İlk Görülme",
+    "son_gorulme": "Son Görülme",
+}
+
 
 def _format_timestamp_value(value: Any) -> str:
     """Epoch (float/int) veya datetime değerini 'YYYY-MM-DD HH:MM:SS UTC' biçimine çevirir.
@@ -223,12 +235,22 @@ def _format_timestamp_value(value: Any) -> str:
         return str(value)
 
 
+def _format_bytes(num_bytes: int | float) -> str:
+    """Byte cinsinden bir değeri KB/MB/GB gibi okunabilir birime çevirir."""
+    value = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:,.2f} {unit}" if unit != "B" else f"{int(value):,} B"
+        value /= 1024
+    return f"{value:,.2f} TB"
+
+
 def _group_recurring_findings(findings: Sequence[ThreatFinding]) -> list[ThreatFinding]:
     """Aynı (rule_id, source, destination) üçlüsü için tekrar eden bulguları
     rapor GÖRÜNÜMÜNDE tek satıra indirger.
 
     Neden gerekli: Kayan pencere tabanlı kurallar (Port Scan ve benzerleri),
-    bir saldırı/tarama devam ettiği sürece art arda birçok ayrı ThreatFinding
+    bir saldırı/tarama devam ettiği sürece art arda bir çok ayrı ThreatFinding
     üretir (her biri kendi zaman penceresinin geçerli kanıtıdır). Bu, adli
     açıdan doğrudur ama aynı satırın onlarca kez tekrarlandığı bir raporu
     analist için okunaksız hale getirir.
@@ -285,6 +307,31 @@ def _group_recurring_findings(findings: Sequence[ThreatFinding]) -> list[ThreatF
     return result
 
 
+def _prepare_statistics_for_template(stats: GeneralStatistics) -> dict[str, Any]:
+    """GeneralStatistics'i şablonun beklediği türetilmiş alanlarla zenginleştirir."""
+    net = stats.network_protocol_distribution
+    trans = stats.transport_protocol_distribution
+    app = stats.application_protocol_distribution
+
+    top_ip = stats.top_source_ips[0][0] if stats.top_source_ips else None
+
+    return {
+        **stats.to_dict(),
+        "total_bytes_formatted": _format_bytes(stats.total_bytes),
+        "start_time_formatted": _format_timestamp_value(stats.first_packet_time),
+        "end_time_formatted": _format_timestamp_value(stats.last_packet_time),
+        "duration_formatted": f"{stats.capture_duration:.2f}s",
+        "top_source_ip": top_ip,
+        "ipv4_count": net.get("IPv4", 0),
+        "ipv6_count": net.get("IPv6", 0),
+        "tcp_count": trans.get("TCP", 0),
+        "udp_count": trans.get("UDP", 0),
+        "http_count": app.get("HTTP", 0),
+        "dns_count": app.get("DNS", 0),
+        "tls_count": app.get("TLS", 0),
+    }
+
+
 def _prepare_findings_for_template(findings: Sequence[ThreatFinding]) -> list[dict[str, Any]]:
     """ThreatFinding nesnelerini şablonun (report.html.j2) beklediği, insan
     tarafından okunabilir sunum alanlarıyla (formatted_timestamp, formatlanmış
@@ -302,6 +349,10 @@ def _prepare_findings_for_template(findings: Sequence[ThreatFinding]) -> list[di
             if key in evidence:
                 evidence[key] = _format_timestamp_value(evidence[key])
 
+        evidence_display = [
+            (_EVIDENCE_LABELS.get(k, k), v) for k, v in evidence.items()
+        ]
+
         rows.append(
             {
                 "rule_id": finding.rule_id,
@@ -309,6 +360,7 @@ def _prepare_findings_for_template(findings: Sequence[ThreatFinding]) -> list[di
                 "severity": finding.severity,
                 "description": finding.description,
                 "evidence": evidence,
+                "evidence_display": evidence_display,
                 "source": finding.source,
                 "destination": finding.destination,
                 "timestamp": finding.timestamp,
@@ -348,7 +400,11 @@ class ChartBuilder:
         return self._to_base64(fig), table_data
 
     def top_hosts_chart(
-        self, hosts: Sequence[tuple[str, int]], title: str, xlabel: str
+        self,
+        hosts: Sequence[tuple[str, int]],
+        title: str,
+        xlabel: str,
+        value_formatter: Callable[[int], str] | None = None,
     ) -> tuple[str | None, list[TableRow]]:
         """Top-K host listesi (talker/bandwidth) için yatay bar grafiği ve tablo üretir."""
         if not hosts:
@@ -365,8 +421,9 @@ class ChartBuilder:
         ax.set_xlabel(xlabel)
         fig.tight_layout()
 
+        fmt = value_formatter or (lambda v: f"{v:,}")
         table_data = [
-            TableRow(label=host, value=f"{count:,}") for host, count in top
+            TableRow(label=host, value=fmt(count)) for host, count in top
         ]
         return self._to_base64(fig), table_data
 
@@ -568,7 +625,7 @@ class Reporter:
 
         html = self._render(
             metadata=metadata,
-            statistics=statistics,
+            statistics=_prepare_statistics_for_template(statistics),
             findings=findings_rows,
             threat_intel=threat_intel,
             risk_summary=risk_summary,
@@ -623,17 +680,20 @@ class Reporter:
 
         # 3. Top Bandwidth Hosts
         img, table = self._chart_builder.top_hosts_chart(
-            statistics.top_bandwidth_hosts, "En Yüksek Bant Genişliği Kullananlar", "Byte"
+            statistics.top_bandwidth_hosts,
+            "En Yüksek Bant Genişliği Kullananlar",
+            "Boyut",
+            value_formatter=_format_bytes,
         )
         if img:
             charts.append(
                 ChartSection(
                     id="top_bandwidth_hosts",
                     title="En Yüksek Bant Genişliği Kullananlar",
-                    description="Toplam veri aktarım hacmi (byte) açısından ağ bant genişliğini en çok tüketen hostlar.",
+                    description="Toplam veri aktarım hacmi açısından ağ bant genişliğini en çok tüketen hostlar.",
                     image=img,
                     table=table,
-                    val_header="Toplam Boyut (Byte)",
+                    val_header="Toplam Boyut",
                 )
             )
 
@@ -673,7 +733,7 @@ class Reporter:
         self,
         *,
         metadata: ReportMetadata,
-        statistics: GeneralStatistics,
+        statistics: dict[str, Any],
         findings: list[dict[str, Any]],
         threat_intel: dict[str, list[NormalizedIOCResult]],
         risk_summary: RiskSummary,
