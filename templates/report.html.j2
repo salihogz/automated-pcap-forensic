@@ -57,7 +57,7 @@
         padding: 18px 20px;
     }
     .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-    .card .value { font-size: 20px; font-weight: 600; margin-top: 4px; word-break: break-all; }
+    .card .value { font-size: 20px; font-weight: 600; margin-top: 4px; overflow-wrap: break-word; word-break: normal; }
     
     .exec-summary {
         background: var(--panel);
@@ -151,7 +151,7 @@
     }
     .evidence-row:last-child { border-bottom: none; }
     .evidence-key { font-weight: 600; color: var(--muted); padding-right: 8px; }
-    .evidence-val { word-break: break-all; text-align: right; }
+    .evidence-val { overflow-wrap: break-word; word-break: normal; text-align: right; }
 
     .finding-title {
         font-weight: 600;
@@ -401,8 +401,8 @@
                         {% set sev = finding.severity_str|default(finding.severity)|string|upper %}
                         <span class="badge {{ sev }}">{{ sev }}</span>
                     </td>
-                    <td>{{ finding.source|default('-') }}</td>
-                    <td>{{ finding.destination|default('-') }}</td>
+                    <td>{{ finding.source_display|default(finding.source)|default('-') }}</td>
+                    <td>{{ finding.destination_display|default(finding.destination)|default('-') }}</td>
                     <td>
                         {% if finding.title %}
                         <div class="finding-title">{{ finding.title }}</div>

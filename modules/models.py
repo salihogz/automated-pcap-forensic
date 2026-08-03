@@ -31,6 +31,13 @@ class PacketInfo:
     dst_port: int | None
     tcp_flags: str | None
 
+    # Bu paket bir DNS YANITI ise, yanıttaki A/AAAA cevap kayıtlarından
+    # türetilen (ip, sorgulanan_hostname) ikilileri. DNS yanıtı değilse
+    # veya çözümlenebilir bir A/AAAA kaydı yoksa boş tuple. Immutable
+    # tuple kullanılır (liste değil) çünkü PacketInfo frozen'dır ve
+    # varsayılan değer tüm örnekler arasında güvenle paylaşılabilmelidir.
+    dns_answers: tuple[tuple[str, str], ...] = ()
+
     def to_dict(self) -> dict:
         """Nesneyi dictionary yapısına dönüştürür (Raporlama ve Jinja2 için)."""
         return asdict(self)
@@ -111,6 +118,20 @@ class GeneralStatistics:
     top_udp_ports: list[tuple[int, int]]
 
     timeline: dict[float, int]
+
+    # IP -> hostname eşlemesi. DNS yanıt paketlerinden (soru adı + A/AAAA
+    # cevap kaydı) türetilir. Bir IP için birden çok hostname görülürse en
+    # sık geçen seçilir (bkz. statistics.py). Eşleşmesi olmayan IP'ler bu
+    # sözlükte YER ALMAZ (raporlama katmanı .get(ip) ile sorgular).
+    # Varsayılan None + __post_init__ kullanılıyor çünkü sabit mutable
+    # default (dict) tüm örnekler arasında paylaşılır; bu ayrıca eski
+    # GeneralStatistics(...) çağrılarıyla (testlerde konumsal/anahtar
+    # sözcüklü, bu alan olmadan) geriye dönük uyumluluğu korur.
+    ip_hostname_map: dict[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.ip_hostname_map is None:
+            self.ip_hostname_map = {}
 
     def to_dict(self) -> dict:
         """Nesneyi dictionary yapısına dönüştürür (Raporlama ve Jinja2 için)."""

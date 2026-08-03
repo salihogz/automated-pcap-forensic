@@ -110,6 +110,49 @@ class PCAPParser:
 
         return None
 
+    # DNS resource record tipleri: A (IPv4) ve AAAA (IPv6). Sadece bu
+    # tipler bir IP adresine karşılık gelir; CNAME/TXT/NS/MX gibi diğer
+    # kayıt tipleri rdata alanında IP taşımaz, bu yüzden atlanır.
+    _DNS_A_AAAA_TYPES = (1, 28)
+
+    @staticmethod
+    def _extract_dns_answers(packet: Packet) -> tuple[tuple[str, str], ...]:
+        """DNS yanıt paketlerinden (ip, hostname) eşleşmelerini çıkarır.
+
+        Hostname olarak orijinal SORU adı (qd.qname) kullanılır; bir yanıt
+        CNAME zinciri içerse dahi (örn. www.site.com -> cdn.example.net ->
+        1.2.3.4), rapor kullanıcısının asıl ilgilendiği "hangi domain bu
+        trafiği tetikledi" sorusunun cevabı sorgulanan isimdir, ara CNAME
+        değil. Yalnızca DNS YANITLARI (qr == 1) işlenir; sorgu paketlerinde
+        henüz bir IP cevabı yoktur.
+        """
+        dns_layer = packet.getlayer(DNS)
+        if dns_layer is None:
+            return ()
+
+        try:
+            if dns_layer.qr != 1 or not dns_layer.ancount or dns_layer.qd is None:
+                return ()
+            query_name = dns_layer.qd.qname
+            if isinstance(query_name, bytes):
+                query_name = query_name.decode("utf-8", errors="ignore")
+            query_name = query_name.rstrip(".")
+            if not query_name:
+                return ()
+        except (AttributeError, IndexError, UnicodeDecodeError):
+            return ()
+
+        results: list[tuple[str, str]] = []
+        for i in range(dns_layer.ancount):
+            try:
+                rr = dns_layer.an[i]
+                if rr.type in PCAPParser._DNS_A_AAAA_TYPES and isinstance(rr.rdata, str):
+                    results.append((rr.rdata, query_name))
+            except (AttributeError, IndexError):
+                continue
+
+        return tuple(results)
+
     @staticmethod
     def _extract_tcp_flags(tcp_layer: TCP) -> str:
         """TCP bayraklarını metne dönüştürür."""
@@ -153,6 +196,10 @@ class PCAPParser:
 
         application_protocol = self._extract_application_protocol(packet, src_port, dst_port)
 
+        dns_answers = (
+            self._extract_dns_answers(packet) if application_protocol == "DNS" else ()
+        )
+
         return PacketInfo(
             id=index,
             epoch_time=epoch_time,
@@ -166,6 +213,7 @@ class PCAPParser:
             src_port=src_port,
             dst_port=dst_port,
             tcp_flags=tcp_flags,
+            dns_answers=dns_answers,
         )
 
     def parse(self) -> list[PacketInfo]:

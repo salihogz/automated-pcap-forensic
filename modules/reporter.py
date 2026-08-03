@@ -235,6 +235,24 @@ def _format_timestamp_value(value: Any) -> str:
         return str(value)
 
 
+def _with_hostname(ip_or_endpoint: str | None, hostname_map: dict[str, str]) -> str | None:
+    """Bir IP (veya 'IP:port' biçimindeki endpoint) değerini, DNS'te
+    görülmüş bir hostname varsa "IP (hostname)" biçiminde zenginleştirir.
+
+    Bulgu (finding) kaynak/hedef alanları bazen port içerdiğinden ('1.2.3.4:443'),
+    eşleşme önce ':' öncesindeki saf IP üzerinden aranır; port bilgisi
+    görüntüde korunur.
+    """
+    if not ip_or_endpoint:
+        return ip_or_endpoint
+
+    ip_part = ip_or_endpoint.split(":", 1)[0]
+    hostname = hostname_map.get(ip_part)
+    if not hostname:
+        return ip_or_endpoint
+    return f"{ip_or_endpoint} ({hostname})"
+
+
 def _format_bytes(num_bytes: float) -> str:
     """Byte cinsinden bir değeri KB/MB/GB gibi okunabilir birime çevirir."""
     value = float(num_bytes)
@@ -314,6 +332,7 @@ def _prepare_statistics_for_template(stats: GeneralStatistics) -> dict[str, Any]
     app = stats.application_protocol_distribution
 
     top_ip = stats.top_source_ips[0][0] if stats.top_source_ips else None
+    top_ip_display = _with_hostname(top_ip, stats.ip_hostname_map) if top_ip else None
 
     return {
         **stats.to_dict(),
@@ -321,7 +340,7 @@ def _prepare_statistics_for_template(stats: GeneralStatistics) -> dict[str, Any]
         "start_time_formatted": _format_timestamp_value(stats.first_packet_time),
         "end_time_formatted": _format_timestamp_value(stats.last_packet_time),
         "duration_formatted": f"{stats.capture_duration:.2f}s",
-        "top_source_ip": top_ip,
+        "top_source_ip": top_ip_display,
         "ipv4_count": net.get("IPv4", 0),
         "ipv6_count": net.get("IPv6", 0),
         "tcp_count": trans.get("TCP", 0),
@@ -332,16 +351,19 @@ def _prepare_statistics_for_template(stats: GeneralStatistics) -> dict[str, Any]
     }
 
 
-def _prepare_findings_for_template(findings: Sequence[ThreatFinding]) -> list[dict[str, Any]]:
+def _prepare_findings_for_template(
+    findings: Sequence[ThreatFinding], hostname_map: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
     """ThreatFinding nesnelerini şablonun (report.html.j2) beklediği, insan
     tarafından okunabilir sunum alanlarıyla (formatted_timestamp, formatlanmış
-    kanıt zaman damgaları) zenginleştirilmiş salt-okunur dict listesine
-    dönüştürür.
+    kanıt zaman damgaları, hostname zenginleştirmeli source/destination)
+    zenginleştirilmiş salt-okunur dict listesine dönüştürür.
 
     Ham ThreatFinding/dataclass nesneleri bu dönüşümden ETKİLENMEZ; bu
     fonksiyon yalnızca View katmanı için ayrı bir temsil üretir (Presentation
     != Domain Model ayrımı).
     """
+    hostname_map = hostname_map or {}
     rows: list[dict[str, Any]] = []
     for finding in findings:
         evidence = dict(finding.evidence)
@@ -363,6 +385,8 @@ def _prepare_findings_for_template(findings: Sequence[ThreatFinding]) -> list[di
                 "evidence_display": evidence_display,
                 "source": finding.source,
                 "destination": finding.destination,
+                "source_display": _with_hostname(finding.source, hostname_map),
+                "destination_display": _with_hostname(finding.destination, hostname_map),
                 "timestamp": finding.timestamp,
                 "formatted_timestamp": _format_timestamp_value(finding.timestamp),
             }
@@ -382,22 +406,66 @@ class ChartBuilder:
     _FIGSIZE: Final[tuple[float, float]] = (8.0, 4.2)
     _DPI: Final[int] = 110
 
+    # Bu eşiğin altındaki dilimler için pasta üzerine yüzde metni yazılmaz.
+    # Eski davranışta (labels=slice üzerinde + autopct her zaman açık) küçük
+    # dilimler (örn. DNS %0.1, NTP %0.01) hepsi dilimin en dar noktasına
+    # sıkıştığından etiketler birbirinin üzerine biniyordu (bkz. rapor
+    # ekran görüntüsü: "DNS"/"NTP"/"0.0%" iç içe geçmiş). Küçük dilimlerin
+    # tüm ayrıntısı zaten sağdaki legend'de ve analist tablosunda mevcut.
+    _PIE_LABEL_MIN_PCT: Final[float] = 3.0
+
     def protocol_distribution_chart(
         self, distribution: dict[str, int]
     ) -> tuple[str | None, list[TableRow]]:
-        """Protokol dağılımı için pasta grafiği ve analist veri tablosu üretir."""
+        """Protokol dağılımı için pasta grafiği ve analist veri tablosu üretir.
+
+        Dilim etiketleri artık pastanın üzerine değil, sağdaki bir legend'e
+        yazılır: paket sayısı çok küçük protokoller (DNS, NTP vb.) büyük bir
+        TLS/TCP dilimiyle aynı grafik üzerinde gösterildiğinde, dilim üstü
+        metinler dilim ne kadar küçülürse küçülsün aynı dar alana sıkışıp
+        birbirine karışıyordu. Legend, dilim boyutundan bağımsız sabit bir
+        alanda okunaklı kalır.
+        """
         if not distribution:
             return None, []
 
         items = sorted(distribution.items(), key=lambda kv: kv[1], reverse=True)
         labels, values = zip(*items, strict=True)
+        total = sum(values)
+
+        def _autopct(pct: float) -> str:
+            return f"{pct:.1f}%" if pct >= self._PIE_LABEL_MIN_PCT else ""
 
         fig, ax = plt.subplots(figsize=self._FIGSIZE, dpi=self._DPI)
-        ax.pie(values, labels=labels, autopct="%1.1f%%", startangle=90)
+        wedges, _texts, _autotexts = ax.pie(
+            values,
+            labels=None,
+            autopct=_autopct,
+            pctdistance=0.75,
+            startangle=90,
+        )
         ax.set_title("Protokol Dağılımı")
+
+        legend_labels = [f"{label} ({value / total:.1%})" for label, value in items]
+        ax.legend(
+            wedges,
+            legend_labels,
+            title="Protokoller",
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            fontsize=8,
+            frameon=False,
+        )
+        fig.tight_layout()
 
         table_data = [TableRow(label=k, value=f"{v:,}") for k, v in items]
         return self._to_base64(fig), table_data
+
+    # Grafik çubuğu etiketlerinde hostname bu uzunluktan sonra kesilir;
+    # aksi halde uzun bir domain adı (örn. bir CDN'in tam alt alan adı)
+    # sol eksen genişliğini anlamsız şekilde büyütüp grafiği okunaksız
+    # hale getirebilir. Tam (kesilmemiş) hostname her zaman yan tablodadır.
+    _CHART_HOSTNAME_MAX_LEN: Final[int] = 28
 
     def top_hosts_chart(
         self,
@@ -405,14 +473,31 @@ class ChartBuilder:
         title: str,
         xlabel: str,
         value_formatter: Callable[[int], str] | None = None,
+        hostname_map: dict[str, str] | None = None,
     ) -> tuple[str | None, list[TableRow]]:
-        """Top-K host listesi (talker/bandwidth) için yatay bar grafiği ve tablo üretir."""
+        """Top-K host listesi (talker/bandwidth) için yatay bar grafiği ve tablo üretir.
+
+        `hostname_map` verilirse (IP -> DNS içinde görülen hostname), her
+        host etiketi "IP (hostname)" biçiminde zenginleştirilir. Bu, bir
+        analistin sadece IP'ye bakarak trafiğin nereden geldiğini tahmin
+        etmek zorunda kalmadan doğrudan görmesini sağlar. Eşleşmesi olmayan
+        (DNS'te hiç görülmemiş) IP'ler değişmeden, sade IP olarak kalır.
+        """
         if not hosts:
             return None, []
 
         top = list(hosts[: config.TOP_N_TALKERS])
+
+        def _display_label(host: str, *, for_chart: bool) -> str:
+            hostname = (hostname_map or {}).get(host)
+            if not hostname:
+                return host
+            if for_chart and len(hostname) > self._CHART_HOSTNAME_MAX_LEN:
+                hostname = hostname[: self._CHART_HOSTNAME_MAX_LEN - 1] + "…"
+            return f"{host} ({hostname})"
+
         # barh en üstte en büyük değeri göstersin diye ters çeviriyoruz.
-        labels = [host for host, _ in reversed(top)]
+        labels = [_display_label(host, for_chart=True) for host, _ in reversed(top)]
         values = [count for _, count in reversed(top)]
 
         fig, ax = plt.subplots(figsize=self._FIGSIZE, dpi=self._DPI)
@@ -423,7 +508,8 @@ class ChartBuilder:
 
         fmt = value_formatter or (lambda v: f"{v:,}")
         table_data = [
-            TableRow(label=host, value=fmt(count)) for host, count in top
+            TableRow(label=_display_label(host, for_chart=False), value=fmt(count))
+            for host, count in top
         ]
         return self._to_base64(fig), table_data
 
@@ -619,7 +705,9 @@ class Reporter:
         display_findings = self._sort_findings_by_severity(
             _group_recurring_findings(findings)
         )
-        findings_rows = _prepare_findings_for_template(display_findings)
+        findings_rows = _prepare_findings_for_template(
+            display_findings, statistics.ip_hostname_map
+        )
 
         charts_list = self._build_charts_list(statistics)
 
@@ -664,7 +752,10 @@ class Reporter:
 
         # 2. Top Talkers
         img, table = self._chart_builder.top_hosts_chart(
-            statistics.top_source_ips, "En Aktif Hostlar (Top Talkers)", "Paket Sayısı"
+            statistics.top_source_ips,
+            "En Aktif Hostlar (Top Talkers)",
+            "Paket Sayısı",
+            hostname_map=statistics.ip_hostname_map,
         )
         if img:
             charts.append(
@@ -684,6 +775,7 @@ class Reporter:
             "En Yüksek Bant Genişliği Kullananlar",
             "Boyut",
             value_formatter=_format_bytes,
+            hostname_map=statistics.ip_hostname_map,
         )
         if img:
             charts.append(

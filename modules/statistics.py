@@ -65,6 +65,11 @@ def build_general_statistics(packets: Iterable[PacketInfo]) -> GeneralStatistics
 
     timeline_counter: Counter[float] = Counter()
 
+    # IP -> (hostname -> görülme sayısı). Aynı IP farklı capture anlarında
+    # birden fazla hostname'e cevap vermiş olabilir (CDN/shared hosting);
+    # rapor için IP başına en sık görülen tek hostname seçilir.
+    ip_hostname_counters: dict[str, Counter[str]] = {}
+
     for packet in packets:
         total_packets += 1
         total_bytes += packet.length
@@ -108,6 +113,10 @@ def build_general_statistics(packets: Iterable[PacketInfo]) -> GeneralStatistics
             _increment_port(udp_port_counter, packet.src_port)
             _increment_port(udp_port_counter, packet.dst_port)
 
+        # --- DNS tabanlı IP -> hostname eşlemesi ---
+        for ip, hostname in packet.dns_answers:
+            ip_hostname_counters.setdefault(ip, Counter())[hostname] += 1
+
         # --- Timeline ---
         # PCAP dosyaları kronolojik yazıldığı için görülen ilk GEÇERLİ
         # zamanlı paket, referans (t=0) olarak kabul edilir.
@@ -124,6 +133,11 @@ def build_general_statistics(packets: Iterable[PacketInfo]) -> GeneralStatistics
         return _empty_statistics()
 
     has_valid_time_data = first_time is not None and last_time is not None
+
+    ip_hostname_map = {
+        ip: hostname_counter.most_common(1)[0][0]
+        for ip, hostname_counter in ip_hostname_counters.items()
+    }
 
     return GeneralStatistics(
         total_packets=total_packets,
@@ -144,6 +158,7 @@ def build_general_statistics(packets: Iterable[PacketInfo]) -> GeneralStatistics
         top_tcp_ports=tcp_port_counter.most_common(config.TOP_N_PORTS),
         top_udp_ports=udp_port_counter.most_common(config.TOP_N_PORTS),
         timeline=dict(sorted(timeline_counter.items())),
+        ip_hostname_map=ip_hostname_map,
     )
 
 
@@ -171,4 +186,5 @@ def _empty_statistics() -> GeneralStatistics:
         top_tcp_ports=[],
         top_udp_ports=[],
         timeline={},
+        ip_hostname_map={},
     )
