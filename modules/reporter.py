@@ -39,11 +39,11 @@ import logging
 import math
 import sys
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Final
+from typing import Any, Final
 
 import matplotlib
 
@@ -235,7 +235,7 @@ def _format_timestamp_value(value: Any) -> str:
         return str(value)
 
 
-def _format_bytes(num_bytes: int | float) -> str:
+def _format_bytes(num_bytes: float) -> str:
     """Byte cinsinden bir değeri KB/MB/GB gibi okunabilir birime çevirir."""
     value = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):

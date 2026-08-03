@@ -3,10 +3,10 @@ Automated PCAP Forensic Analysis Tool - CLI Entry Point
 """
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import perf_counter
 
