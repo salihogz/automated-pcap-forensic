@@ -72,9 +72,18 @@ class PCAPParser:
     def _extract_application_protocol(
         packet: Packet,
         src_port: int | None,
-        dst_port: int | None
+        dst_port: int | None,
+        transport_protocol: str | None,
     ) -> str | None:
-        """Uygulama katmanı protokolünü tespit eder (Scapy katmanları ve port fallback)."""
+        """Uygulama katmanı protokolünü tespit eder (Scapy katmanları ve port fallback).
+
+        Port fallback'i `transport_protocol`'ü dikkate alır: HTTP/TLS/SSH/FTP
+        yalnızca TCP üzerinde anlamlıdır. Bunun kontrol edilmemesi, günümüzde
+        çok yaygın olan QUIC/HTTP3 trafiğini (UDP/443, örn. Cloudflare/Google
+        CDN'leri) "TLS" olarak yanlış sınıflandırıyordu — TLS'in kendisi
+        yalnızca TCP üzerinde koşar, QUIC ise kendi (UDP tabanlı) şifreleme
+        katmanına sahiptir ve raporlarda ayrı bir protokol olarak görünmelidir.
+        """
         if packet.haslayer(DNS):
             return "DNS"
         if packet.haslayer(DHCP):
@@ -91,15 +100,19 @@ class PCAPParser:
             return "HTTP"
 
         ports = {src_port, dst_port} - {None}
+        is_tcp = transport_protocol == "TCP"
+
         if 53 in ports:
             return "DNS"
-        if 80 in ports or 8080 in ports:
+        if (443 in ports or 8443 in ports) and not is_tcp:
+            return "QUIC"
+        if (80 in ports or 8080 in ports) and is_tcp:
             return "HTTP"
-        if 443 in ports or 8443 in ports:
+        if (443 in ports or 8443 in ports) and is_tcp:
             return "TLS"
-        if 22 in ports:
+        if 22 in ports and is_tcp:
             return "SSH"
-        if 21 in ports or 20 in ports:
+        if (21 in ports or 20 in ports) and is_tcp:
             return "FTP"
         if 67 in ports or 68 in ports:
             return "DHCP"
@@ -223,7 +236,9 @@ class PCAPParser:
                 if icmp_layer is not None:
                     transport_protocol = "ICMP"
 
-        application_protocol = self._extract_application_protocol(packet, src_port, dst_port)
+        application_protocol = self._extract_application_protocol(
+            packet, src_port, dst_port, transport_protocol
+        )
 
         dns_answers = ()
         dns_query_name = None

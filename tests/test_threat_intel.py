@@ -255,6 +255,35 @@ def test_abuseipdb_query_success_clean():
     assert result.is_malicious is False
     assert result.raw_score == 0
     assert result.last_seen is None
+    assert result.categories == ()
+
+
+def test_abuseipdb_query_requests_verbose_and_extracts_categories():
+    """AbuseIPDB, 'verbose' parametresi olmadan 'reports' listesini (ve
+    dolayısıyla kategori bilgisini) döndürmez; provider bu parametreyi
+    göndermeli ve gelen sayısal kategori kodlarını (bkz.
+    config.ABUSEIPDB_CATEGORY_MAP) insan tarafından okunabilir etiketlere
+    çevirmelidir. Haritada olmayan bir kod (999) da kaybolmadan
+    "UNKNOWN_999" olarak korunmalıdır."""
+    payload = {
+        "data": {
+            "abuseConfidenceScore": 100,
+            "lastReportedAt": "2026-01-10T12:00:00Z",
+            "reports": [
+                {"categories": [18, 22], "comment": "SSH brute-force"},
+                {"categories": [14, 999], "comment": "Port scan + bilinmeyen kod"},
+            ],
+        }
+    }
+    session = _fake_session(_FakeResponse(json_data=payload))
+    provider = AbuseIPDBProvider(session, api_key="abuse-key")
+
+    result = provider.query("6.6.6.6")
+
+    assert result.categories == ("Port Scan", "Brute-Force", "SSH", "UNKNOWN_999")
+
+    _, kwargs = session.request.call_args
+    assert "verbose" in kwargs["params"]
 
 
 def test_alienvault_otx_query_success_with_pulses():

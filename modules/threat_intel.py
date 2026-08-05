@@ -181,6 +181,32 @@ def _calculate_vt_confidence(stats: dict[str, Any]) -> float | None:
     return round((malicious_count + suspicious_count) / total_relevant_votes, 4)
 
 
+def _extract_abuseipdb_categories(reports: list[Any]) -> tuple[str, ...]:
+    """AbuseIPDB'nin ``reports[].categories`` alanındaki sayısal kategori
+    kodlarını (bkz. ``config.ABUSEIPDB_CATEGORY_MAP``) insan tarafından
+    okunabilir etiketlere çevirir.
+
+    NOT: AbuseIPDB'nin standart (verbose olmayan) ``/check`` yanıtı
+    ``reports`` listesini İÇERMEZ; bu yüzden istek ``verbose`` parametresiyle
+    gönderilir (bkz. AbuseIPDBProvider.query). ``config.ABUSEIPDB_CATEGORY_MAP``
+    tam olmayabilir; haritada bulunmayan bir kod, sessizce atlanmak yerine
+    ``UNKNOWN_<id>`` olarak korunur (kanıt kaybı yaşanmaz).
+    """
+    category_ids: set[int] = set()
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        for raw_id in report.get("categories") or []:
+            cid = _safe_int(raw_id)
+            if cid is not None:
+                category_ids.add(cid)
+
+    return tuple(
+        config.ABUSEIPDB_CATEGORY_MAP.get(cid, f"UNKNOWN_{cid}")
+        for cid in sorted(category_ids)
+    )
+
+
 def _safe_get_json_key(payload: Any, *keys: str) -> str | None:
     """Nested dict yapıları içerisinden sırasıyla verilen key dizisini arar ve string döndürür."""
     curr = payload
@@ -419,6 +445,11 @@ class AbuseIPDBProvider(ThreatIntelProvider):
         params = {
             "ipAddress": ip_str,
             "maxAgeInDays": config.ABUSEIPDB_MAX_AGE_DAYS,
+            # "verbose" olmadan yanıt "reports" listesini içermez ve
+            # kategori bilgisi (SSH, Brute-Force, Port Scan vb.) hiç
+            # gelmez; değer önemsizdir, AbuseIPDB yalnızca anahtarın
+            # varlığına bakar.
+            "verbose": "true",
         }
 
         response, err_code, err_msg = self._execute_request("GET", url, headers=headers, params=params)
@@ -435,8 +466,7 @@ class AbuseIPDBProvider(ThreatIntelProvider):
             data = payload.get("data", {})
 
             abuse_score = _safe_int(data.get("abuseConfidenceScore"), default=0) or 0
-
-            categories: list[str] = []
+            categories = _extract_abuseipdb_categories(data.get("reports") or [])
 
             confidence = (
                 round(abuse_score / 100, 4)
@@ -449,7 +479,7 @@ class AbuseIPDBProvider(ThreatIntelProvider):
                 ip=ip_str,
                 is_malicious=abuse_score > 0,
                 raw_score=abuse_score,
-                categories=tuple(categories),
+                categories=categories,
                 last_seen=_parse_iso8601(data.get("lastReportedAt")),
                 queried_at=queried_at,
                 provider_error_code=None,

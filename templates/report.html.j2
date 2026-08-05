@@ -326,6 +326,15 @@
                 </div>
             </div>
         </div>
+
+        <div class="grid grid-4" style="margin-top:16px;">
+            <div class="card" style="grid-column: 1 / -1;">
+                <div class="label">SHA-256 (Chain of Custody — Kaynak Dosya Bütünlüğü)</div>
+                <div class="value" style="font-size:13px; font-family: Consolas, monospace; font-weight:400;">
+                    {{ metadata.sha256|default('Hesaplanamadı (dosya özeti alınırken hata oluştu)', true) }}
+                </div>
+            </div>
+        </div>
     </section>
 
     <!-- 2. Trafik Grafikleri ve Analist Tabloları -->

@@ -34,6 +34,7 @@ istasyonunda da açılabilir.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import logging
 import math
@@ -107,6 +108,35 @@ _SEVERITY_ORDER: Final[list[str]] = [
 
 class ReportGenerationError(Exception):
     """Rapor üretimi başarısız olduğunda fırlatılır (Fail Fast)."""
+
+
+# Dosya sabit boyutlu parçalar halinde okunur ki büyük capture dosyaları
+# (GB mertebesinde) hash hesabı için tek seferde belleğe alınmasın —
+# modül genelindeki streaming/memory-friendly ilkeyle tutarlı.
+_SHA256_CHUNK_SIZE: Final[int] = 1024 * 1024  # 1 MB
+
+
+def _compute_sha256(file_path: Path) -> str | None:
+    """Kaynak PCAP dosyasının SHA256 özetini hesaplar (chain-of-custody).
+
+    Adli bilişimde delil dosyasının bütünlüğünün (analiz sırasında hiç
+    değişmediğinin) kanıtlanması standart bir gerekliliktir; rapor bu
+    özeti "Chain of Custody" alanında gösterir. Hesaplama başarısız
+    olursa (örn. dosya bu adımdan önce taşınmış/silinmişse ya da okuma
+    izni yoksa) rapor üretimi bu yüzden durmaz — Fail Soft: sha256 alanı
+    None kalır, durum loglanır (bkz. `_format_timestamp_value` ile aynı
+    desen: sunum katmanındaki tek bir eksik alan, tüm rapor üretimini
+    engellememelidir).
+    """
+    try:
+        digest = hashlib.sha256()
+        with file_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(_SHA256_CHUNK_SIZE), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError as exc:
+        logger.warning("Kaynak dosyanın SHA256 özeti hesaplanamadı: %s", exc)
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,17 +228,37 @@ def compute_risk_summary(findings: Sequence[ThreatFinding]) -> RiskSummary:
 # anahtarlar. Bu anahtarların değerleri, rapora yazılmadan önce insan
 # tarafından okunabilir bir tarihe çevrilir. Yeni bir tespit kuralı evidence
 # içine zaman damgası koyarsa, anahtarını buraya eklemesi yeterlidir.
+#
+# NOT: `first_seen_epoch`/`last_seen_epoch`, threat_detector.py'deki
+# kuralların (port/syn scan, ICMP flood, failed-TCP, DNS tunneling,
+# exfiltration) fiilen ürettiği anahtarlardır. `ilk_gorulme`/`son_gorulme`
+# ise yalnızca `_group_recurring_findings()`'in tekrarlanan bulguları
+# birleştirirken ürettiği anahtarlardır (bkz. o fonksiyon).
 _EVIDENCE_TIME_KEYS: Final[frozenset[str]] = frozenset(
-    {"window_start_time", "window_end_time", "ilk_gorulme", "son_gorulme"}
+    {"first_seen_epoch", "last_seen_epoch", "ilk_gorulme", "son_gorulme"}
 )
 
 _EVIDENCE_LABELS: Final[dict[str, str]] = {
     "distinct_port_count": "Farklı Port Sayısı",
-    "threshold": "Eşik Değeri",
     "time_window_seconds": "Zaman Penceresi (sn)",
-    "scanned_ports": "Taranan Portlar",
-    "window_start_time": "Pencere Başlangıcı",
-    "window_end_time": "Pencere Bitişi",
+    "first_seen_epoch": "İlk Görülme",
+    "last_seen_epoch": "Son Görülme",
+    "sampled_ports": "Örneklenen Portlar",
+    "total_packets_in_window": "Pencere İçindeki Paket Sayısı",
+    "transport_protocols": "Taşıma Protokolleri",
+    "packet_count": "Paket Sayısı",
+    "failed_attempt_count": "Başarısız Deneme Sayısı",
+    "sampled_target_ports": "Örneklenen Hedef Portlar",
+    "base_domain": "Temel Alan Adı",
+    "query_count": "Sorgu Sayısı",
+    "suspicious_qtype_count": "Şüpheli Kayıt Tipi Sayısı",
+    "sampled_queries": "Örneklenen Sorgular",
+    "total_bytes": "Toplam Byte",
+    "total_megabytes": "Toplam MB",
+    "threshold_bytes": "Eşik (Byte)",
+    "total_long_domains": "Uzun Alan Adı Sayısı",
+    "total_dga_domains": "DGA Şüpheli Alan Adı Sayısı",
+    "domains": "Alan Adları",
     "tekrar_sayisi": "Tekrar Sayısı",
     "ilk_gorulme": "İlk Görülme",
     "son_gorulme": "Son Görülme",
@@ -430,7 +480,7 @@ class ChartBuilder:
             return None, []
 
         items = sorted(distribution.items(), key=lambda kv: kv[1], reverse=True)
-        labels, values = zip(*items, strict=True)
+        _labels, values = zip(*items, strict=True)
         total = sum(values)
 
         def _autopct(pct: float) -> str:
@@ -677,6 +727,7 @@ class Reporter:
         metadata = ReportMetadata(
             source_file=source_file.name,
             analysis_duration_seconds=analysis_duration,
+            sha256=_compute_sha256(source_file),
         )
 
         # Girdi dosyasının üst klasör ismine göre hedef klasörü seç (clean / malicious)

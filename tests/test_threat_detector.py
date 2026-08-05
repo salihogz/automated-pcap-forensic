@@ -319,6 +319,87 @@ def test_dns_tunneling_detection():
     assert dns_findings[0].evidence["base_domain"] == "tunneldomain.com"
 
 
+def test_dns_tunneling_base_domain_handles_multi_label_public_suffix():
+    """base_domain çıkarımı, ikinci seviye TLD'lerde (örn. .com.tr) sondan
+    iki etiketi ("com.tr") değil, gerçek kayıtlı alan adını ("evilcorp.com.tr")
+    döndürmelidir; aksi halde bu alan adı yanlışlıkla suffix'in kendisiyle
+    eşleşir (bkz. ThreatDetector._compute_base_domain)."""
+    packets = [
+        PacketInfo(
+            id=i,
+            epoch_time=1000.0 + i * 0.1,
+            src_ip="192.168.1.50",
+            dst_ip="8.8.8.8",
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="UDP",
+            application_protocol="DNS",
+            length=120,
+            src_port=53530,
+            dst_port=53,
+            tcp_flags=None,
+            dns_query_name=f"sub{i}.evilcorp.com.tr",
+            dns_query_type="TXT",
+        )
+        for i in range(35)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(packets)
+
+    dns_findings = [f for f in findings if f.rule_id == "SEC-DNS-TUNNEL-001"]
+    assert len(dns_findings) == 1
+    assert dns_findings[0].evidence["base_domain"] == "evilcorp.com.tr"
+
+
+def test_dns_tunneling_does_not_merge_unrelated_domains_under_same_suffix():
+    """İki ilgisiz ".com.tr" alan adına yapılan, her biri eşiğin altında kalan
+    sorgular, eski (sondan-iki-etiket) mantıkta olduğu gibi tek bir "com.tr"
+    kovasında birleşip yanlış-pozitif bir tünelleme bulgusu üretmemelidir."""
+    site1_packets = [
+        PacketInfo(
+            id=i,
+            epoch_time=1000.0 + i * 0.1,
+            src_ip="192.168.1.50",
+            dst_ip="8.8.8.8",
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="UDP",
+            application_protocol="DNS",
+            length=120,
+            src_port=53530,
+            dst_port=53,
+            tcp_flags=None,
+            dns_query_name="site1.com.tr",
+            dns_query_type="A",
+        )
+        for i in range(15)
+    ]
+    site2_packets = [
+        PacketInfo(
+            id=100 + i,
+            epoch_time=1000.0 + i * 0.1,
+            src_ip="192.168.1.50",
+            dst_ip="8.8.8.8",
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="UDP",
+            application_protocol="DNS",
+            length=120,
+            src_port=53531,
+            dst_port=53,
+            tcp_flags=None,
+            dns_query_name="unrelated2.com.tr",
+            dns_query_type="A",
+        )
+        for i in range(20)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(site1_packets + site2_packets)
+
+    dns_findings = [f for f in findings if f.rule_id == "SEC-DNS-TUNNEL-001"]
+    assert len(dns_findings) == 0
+
+
 def test_long_domain_detection():
     """Anormal uzunluktaki domain tespiti."""
     long_domain = "a" * 60 + ".com"
@@ -347,7 +428,7 @@ def test_long_domain_detection():
 
 def test_dga_domain_detection():
     """DGA domain tespiti test eder."""
-    dga_domain = "cxzkjvhfzkjhfvkzjhdfv.com"
+    dga_domain = "kqxvzptbnjwlmfr.com"  # etiket entropisi ~3.9, DGA_ENTROPY_THRESHOLD (3.5) üzerinde
     packet = PacketInfo(
         id=1,
         epoch_time=1000.0,
@@ -396,6 +477,39 @@ def test_exfiltration_detection():
     exfil_findings = [f for f in findings if f.rule_id == "SEC-EXFIL-001"]
     assert len(exfil_findings) == 1
     assert exfil_findings[0].evidence["total_megabytes"] >= 50.0
+    assert exfil_findings[0].evidence["time_window_seconds"] == config.EXFILTRATION_TIME_WINDOW_SECONDS
+
+
+def test_exfiltration_ignores_slow_benign_transfer_over_long_capture():
+    """Zaman penceresi olmadan (eski davranış) toplam hacim eşiği aşan, ama
+    aslında saatlerce yayılmış düşük hızlı sıradan bir aktarım (örn. büyük bir
+    dosya indirmesi), pencereli kontrolde HİÇBİR tekil pencerede eşiği
+    aşmadığı için artık bulgu üretmemelidir."""
+    # 100 paket * 1 MB, 72 saniye arayla (toplam ~2 saat, 100 MB) ->
+    # herhangi bir 300 saniyelik pencereye en fazla ~4-5 paket (~4-5 MB) düşer,
+    # bu da EXFILTRATION_THRESHOLD'un (50 MB) çok altındadır.
+    packets = [
+        PacketInfo(
+            id=i,
+            epoch_time=1000.0 + i * 72,
+            src_ip="192.168.1.50",
+            dst_ip="93.184.216.34",  # Public IP
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="TCP",
+            application_protocol=None,
+            length=1 * 1024 * 1024,  # 1 MB
+            src_port=54321,
+            dst_port=443,
+            tcp_flags="PA",
+        )
+        for i in range(100)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(packets)
+
+    exfil_findings = [f for f in findings if f.rule_id == "SEC-EXFIL-001"]
+    assert len(exfil_findings) == 0
 
 
 # --- _is_valid_transport_packet Parametrik Testleri ---

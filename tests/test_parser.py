@@ -114,21 +114,30 @@ def test_extract_network_layer(packet, expected_src, expected_dst, expected_prot
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
-    "packet, src_port, dst_port, expected",
+    "packet, src_port, dst_port, transport_protocol, expected",
     [
-        (make_udp_packet(sport=53, dport=51000, payload=DNS()), 53, 51000, "DNS"),
-        (make_tcp_packet(sport=54321, dport=8080), 54321, 8080, "HTTP"),
-        (make_tcp_packet(sport=54321, dport=443), 54321, 443, "TLS"),
-        (make_tcp_packet(sport=54321, dport=22), 54321, 22, "SSH"),
-        (make_udp_packet(sport=68, dport=67, payload=DHCP()), 68, 67, "DHCP"),
-        (make_udp_packet(sport=54321, dport=123, payload=NTP()), 54321, 123, "NTP"),
-        (make_udp_packet(sport=54321, dport=161, payload=SNMP()), 54321, 161, "SNMP"),
-        (make_tcp_packet(sport=54321, dport=59999), 54321, 59999, None),
+        (make_udp_packet(sport=53, dport=51000, payload=DNS()), 53, 51000, "UDP", "DNS"),
+        (make_tcp_packet(sport=54321, dport=8080), 54321, 8080, "TCP", "HTTP"),
+        (make_tcp_packet(sport=54321, dport=443), 54321, 443, "TCP", "TLS"),
+        (make_tcp_packet(sport=54321, dport=22), 54321, 22, "TCP", "SSH"),
+        (make_udp_packet(sport=68, dport=67, payload=DHCP()), 68, 67, "UDP", "DHCP"),
+        (make_udp_packet(sport=54321, dport=123, payload=NTP()), 54321, 123, "UDP", "NTP"),
+        (make_udp_packet(sport=54321, dport=161, payload=SNMP()), 54321, 161, "UDP", "SNMP"),
+        (make_tcp_packet(sport=54321, dport=59999), 54321, 59999, "TCP", None),
+        # QUIC/HTTP3: port 443 fakat taşıma UDP'dir -> TLS DEĞİL, QUIC olarak
+        # sınıflandırılmalı (TLS yalnızca TCP üzerinde koşar). Bu senaryo
+        # gerçek capture'larda (Cloudflare/Google CDN) baskın hacimde
+        # görülebilir; transport kontrolü olmadan hepsi yanlışlıkla "TLS"
+        # sayılıp protokol dağılımı istatistiklerini bozardı.
+        (make_udp_packet(sport=54321, dport=443), 54321, 443, "UDP", "QUIC"),
+        # Port 80 üzerinden UDP: standart bir protokol değildir, HTTP TCP
+        # gerektirdiğinden bu paket tanınmamalı (None) döner.
+        (make_udp_packet(sport=54321, dport=80), 54321, 80, "UDP", None),
     ],
-    ids=["dns", "http", "tls", "ssh", "dhcp", "ntp", "snmp", "unknown"],
+    ids=["dns", "http", "tls", "ssh", "dhcp", "ntp", "snmp", "unknown", "quic-udp-443", "udp-80-unclassified"],
 )
-def test_extract_application_protocol(packet, src_port, dst_port, expected):
-    result = PCAPParser._extract_application_protocol(packet, src_port, dst_port)
+def test_extract_application_protocol(packet, src_port, dst_port, transport_protocol, expected):
+    result = PCAPParser._extract_application_protocol(packet, src_port, dst_port, transport_protocol)
 
     assert result == expected
 

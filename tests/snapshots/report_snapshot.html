@@ -56,7 +56,7 @@ border-radius: 10px;
 padding: 18px 20px;
 }
 .card .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-.card .value { font-size: 20px; font-weight: 600; margin-top: 4px; word-break: break-all; }
+.card .value { font-size: 20px; font-weight: 600; margin-top: 4px; overflow-wrap: break-word; word-break: normal; }
 .exec-summary {
 background: var(--panel);
 border-left: 4px solid var(--accent);
@@ -142,7 +142,7 @@ border-bottom: 1px dashed var(--border);
 }
 .evidence-row:last-child { border-bottom: none; }
 .evidence-key { font-weight: 600; color: var(--muted); padding-right: 8px; }
-.evidence-val { word-break: break-all; text-align: right; }
+.evidence-val { overflow-wrap: break-word; word-break: normal; text-align: right; }
 .finding-title {
 font-weight: 600;
 color: var(--text);
@@ -234,29 +234,29 @@ HIGH: 1                </strong>şeklindedir. Sistem genelinde belirlenen risk s
 <div class="card">
 <div class="label">Toplam Hacim</div>
 <div class="value">
-10485760                </div>
+10.00 MB                </div>
 </div>
 </div>
 <div class="grid grid-4" style="margin-top:16px;">
 <div class="card">
 <div class="label">Yakalama Başlangıcı</div>
 <div class="value" style="font-size:14px;">
--                </div>
+2026-01-01 00:00:00 UTC                </div>
 </div>
 <div class="card">
 <div class="label">Yakalama Bitişi</div>
 <div class="value" style="font-size:14px;">
--                </div>
+2026-01-01 00:00:00 UTC                </div>
 </div>
 <div class="card">
 <div class="label">Geçen Süre (Duration)</div>
 <div class="value" style="font-size:14px;">
-0s                </div>
+0.00s                </div>
 </div>
 <div class="card">
 <div class="label">En Aktif Host (Top IP)</div>
 <div class="value" style="font-size:14px;">
--
+192.168.1.50
 </div>
 </div>
 </div>
@@ -264,25 +264,33 @@ HIGH: 1                </strong>şeklindedir. Sistem genelinde belirlenen risk s
 <div class="card">
 <div class="label">IPv4 / IPv6</div>
 <div class="value" style="font-size:15px;">
-0 / 0
+14000 / 1000
 </div>
 </div>
 <div class="card">
 <div class="label">TCP / UDP</div>
 <div class="value" style="font-size:15px;">
-0 / 0
+10000 / 4000
 </div>
 </div>
 <div class="card">
 <div class="label">HTTP / DNS</div>
 <div class="value" style="font-size:15px;">
-0 / 0
+4000 / 1000
 </div>
 </div>
 <div class="card">
 <div class="label">TLS (HTTPS)</div>
 <div class="value" style="font-size:15px;">
 0
+</div>
+</div>
+</div>
+<div class="grid grid-4" style="margin-top:16px;">
+<div class="card" style="grid-column: 1 / -1;">
+<div class="label">SHA-256 (Chain of Custody — Kaynak Dosya Bütünlüğü)</div>
+<div class="value" style="font-size:13px; font-family: Consolas, monospace; font-weight:400;">
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </div>
 </div>
 </div>
@@ -354,7 +362,7 @@ HIGH: 1                </strong>şeklindedir. Sistem genelinde belirlenen risk s
 </section>
 <section id="top_bandwidth_hosts">
 <h2>4. En Yüksek Bant Genişliği Kullananlar</h2>
-<p class="chart-desc">Toplam veri aktarım hacmi (byte) açısından ağ bant genişliğini en çok tüketen hostlar.</p>
+<p class="chart-desc">Toplam veri aktarım hacmi açısından ağ bant genişliğini en çok tüketen hostlar.</p>
 <div class="chart-container">
 <div class="chart-box">
 <img src="data:image/png;base64,SNAPSHOT_BASE64_PLACEHOLDER" alt="En Yüksek Bant Genişliği Kullananlar">
@@ -365,17 +373,17 @@ HIGH: 1                </strong>şeklindedir. Sistem genelinde belirlenen risk s
 <thead>
 <tr>
 <th scope="col">Parametre / Etiket</th>
-<th scope="col">Toplam Boyut (Byte)</th>
+<th scope="col">Toplam Boyut</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>192.168.1.50</td>
-<td><strong>5,242,880</strong></td>
+<td><strong>5.00 MB</strong></td>
 </tr>
 <tr>
 <td>10.0.0.1</td>
-<td><strong>2,621,440</strong></td>
+<td><strong>2.50 MB</strong></td>
 </tr>
 </tbody>
 </table>

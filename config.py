@@ -43,6 +43,28 @@ DNS_TUNNEL_TIME_WINDOW_SECONDS: int = 60
 DNS_TUNNEL_QUERY_COUNT_THRESHOLD: int = 30
 DNS_TUNNEL_SUSPICIOUS_QTYPES: tuple[str, ...] = ("TXT", "NULL", "CNAME")
 
+# "Temel alan adı" (base_domain) çıkarımı normalde sondan iki etikettir
+# (örn. "sub.evil.com" -> "evil.com"). Ancak çok parçalı public suffix'lere
+# (ikinci seviye TLD) sahip alan adlarında ("sub.firma.com.tr",
+# "sub.firma.co.uk") sondan iki etiket yalnızca suffix'in kendisidir
+# ("com.tr", "co.uk"); bu durumda TÜM ".com.tr" alan adları aynı kovaya
+# düşer ve birbiriyle hiç ilgisi olmayan şirketlerin DNS trafiği
+# yanlışlıkla tek bir "domain" olarak gruplanır (bkz. threat_detector.py
+# _detect_dns_tunneling / _compute_base_domain). Bu liste, tam bir Public
+# Suffix List (PSL) değildir — internet bağlantısı gerektirmeyen,
+# offline çalışma gereksinimine uygun, en yaygın çok parçalı suffix'leri
+# kapsayan küçük, statik bir tablodur. Kapsanmayan bir suffix ile
+# karşılaşılırsa eski (sondan-iki-etiket) davranışa sessizce geri döner.
+DNS_TUNNEL_MULTI_LABEL_SUFFIXES: frozenset[str] = frozenset({
+    # Türkiye
+    "com.tr", "gov.tr", "org.tr", "net.tr", "edu.tr", "web.tr", "info.tr", "gen.tr",
+    # Birleşik Krallık
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "net.uk", "sch.uk",
+    # Diğer yaygın ikinci seviye TLD'ler
+    "co.jp", "co.kr", "co.in", "co.nz", "co.za", "com.au", "com.br", "com.cn",
+    "com.mx", "com.ar", "com.sg", "com.hk",
+})
+
 DGA_MIN_LABEL_LENGTH: int = 12
 
 # --------------------------------------------------------------------
@@ -79,6 +101,38 @@ URLHAUS_BASE_URL = "https://urlhaus-api.abuse.ch/v1"
 # 5. Provider Ayarları
 ABUSEIPDB_MAX_AGE_DAYS = 90
 OTX_MAX_CATEGORY_COUNT = 20
+
+# AbuseIPDB'nin "reports[].categories" alanındaki sabit sayısal kategori
+# kodlarının insan tarafından okunabilir karşılıkları (bkz. AbuseIPDB API
+# dokümantasyonu / https://www.abuseipdb.com/categories). Bu liste
+# AbuseIPDB tarafında zaman zaman güncellenebilir; haritada olmayan bir
+# kod threat_intel.py tarafında "UNKNOWN_<id>" olarak korunur, asla
+# sessizce kaybolmaz.
+ABUSEIPDB_CATEGORY_MAP: dict[int, str] = {
+    1: "DNS Compromise",
+    2: "DNS Poisoning",
+    3: "Fraud Orders",
+    4: "DDoS Attack",
+    5: "FTP Brute-Force",
+    6: "Ping of Death",
+    7: "Phishing",
+    8: "Fraud VoIP",
+    9: "Open Proxy",
+    10: "Web Spam",
+    11: "Email Spam",
+    12: "Blog Spam",
+    13: "VPN IP",
+    14: "Port Scan",
+    15: "Hacking",
+    16: "SQL Injection",
+    17: "Spoofing",
+    18: "Brute-Force",
+    19: "Bad Web Bot",
+    20: "Exploited Host",
+    21: "Web App Attack",
+    22: "SSH",
+    23: "IoT Targeted",
+}
 
 # 6. Environment Variable İsimleri
 VIRUSTOTAL_API_KEY_ENV = "VT_API_KEY"
@@ -134,6 +188,15 @@ DNS_QTYPE_MAP = {
 UNKNOWN_PROTOCOL = "OTHER"
 DEFAULT_FLAGS = "NONE"
 
+# Eşik, sabit bir zaman penceresi İÇİNDE aşılması gereken byte miktarıdır
+# (bkz. threat_detector._detect_exfiltration). Bir pencere yok sayılırsa
+# (eski davranış) tüm capture boyunca biriken toplam byte eşikle
+# karşılaştırılır; bu da saatlerce süren normal bir indirme/video akışını
+# dahi CRITICAL olarak işaretler. 5 dakikalık pencere, "kısa sürede
+# yüksek hacim" olan gerçek sızdırma davranışını "yavaş ve sürekli" olan
+# sıradan trafikten ayırmaya yetecek kadar sıkı, yanlış-pozitifi
+# azaltacak kadar da geniştir.
+EXFILTRATION_TIME_WINDOW_SECONDS: int = 300
 EXFILTRATION_THRESHOLD = 50 * 1024 * 1024
 LONG_DOMAIN_LENGTH = 50
 DGA_ENTROPY_THRESHOLD = 3.5

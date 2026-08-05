@@ -38,6 +38,12 @@ reports/
 .idea/
 
 # ==========================
+# AI Tooling (local caches / generated analysis output)
+# ==========================
+.serena/
+graphify-out/
+
+# ==========================
 # Operating System Files
 # ==========================
 .DS_Store

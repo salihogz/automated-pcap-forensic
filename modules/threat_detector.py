@@ -8,7 +8,7 @@ import ipaddress
 import logging
 import math
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
 
 import config
 from modules.models import GeneralStatistics, PacketInfo, ThreatFinding, ThreatSeverity
@@ -55,9 +55,7 @@ class ThreatDetector:
             return False
         if packet.epoch_time is None or packet.epoch_time <= 0:
             return False
-        if packet.transport_protocol not in ("TCP", "UDP"):
-            return False
-        return True
+        return packet.transport_protocol in ("TCP", "UDP")
 
     @staticmethod
     def _is_egress_traffic(src_ip: str, dst_ip: str) -> bool:
@@ -85,6 +83,35 @@ class ThreatDetector:
         return entropy
 
     @staticmethod
+    def _compute_base_domain(query_name: str) -> str:
+        """Bir DNS sorgu adından, gruplama için kullanılacak "temel alan adı"nı çıkarır.
+
+        Naif yaklaşım sondan iki etiketi alır (`"sub.evil.com"` -> `"evil.com"`),
+        ancak çok parçalı public suffix'lere sahip alan adlarında
+        (`"sub.firma.com.tr"`, `"sub.firma.co.uk"`) bu, suffix'in kendisini
+        ("com.tr", "co.uk") temel alan adı sanar; bunun sonucunda birbiriyle
+        hiçbir ilgisi olmayan şirketlerin ".com.tr"/".co.uk" trafiği aynı
+        (src_ip, base_domain) kovasında toplanır — hem yanlış-pozitif
+        SEC-DNS-TUNNEL-001 bulgularına hem de bulgudaki `base_domain` kanıt
+        alanının anlamsız bir suffix'e (ör. gerçek saldırgan alan adı yerine
+        "com.tr") işaret etmesine yol açar.
+
+        `config.DNS_TUNNEL_MULTI_LABEL_SUFFIXES` tam bir Public Suffix List
+        (PSL) değildir — offline çalışma gereksinimi nedeniyle internetten
+        PSL çekmek yerine en yaygın çok parçalı suffix'leri kapsayan küçük,
+        statik bir tablo kullanılır. Tabloda olmayan bir suffix ile
+        karşılaşılırsa eski (sondan-iki-etiket) davranışa sessizce geri döner.
+        """
+        parts = query_name.split(".")
+        if len(parts) < 2:
+            return query_name
+
+        last_two = ".".join(parts[-2:])
+        if len(parts) >= 3 and last_two in config.DNS_TUNNEL_MULTI_LABEL_SUFFIXES:
+            return ".".join(parts[-3:])
+        return last_two
+
+    @staticmethod
     def _collect_unique_query_domains(packets: list[PacketInfo]) -> dict[str, list[PacketInfo]]:
         """Sorgulanan domain adlarına göre paketleri gruplar."""
         domains_map: dict[str, list[PacketInfo]] = defaultdict(list)
@@ -92,6 +119,54 @@ class ThreatDetector:
             if pkt.dns_query_name:
                 domains_map[pkt.dns_query_name].append(pkt)
         return domains_map
+
+    @staticmethod
+    def _slide_count_windows(
+        sorted_pkts: list[PacketInfo],
+        time_window: int,
+        threshold: float,
+        weight_fn: Callable[[PacketInfo], float] | None = None,
+    ) -> Iterator[tuple[int, int]]:
+        """Zamana göre sıralı bir paket listesi üzerinde kayan pencere
+        taraması yapar; pencere içindeki toplam AĞIRLIK eşiği karşılarsa
+        yarı-açık `[left, right)` indeks aralığını üretir (`sorted_pkts[left:right]`).
+
+        `weight_fn` her paketin pencere toplamına ne kadar katkı yapacağını
+        belirler; varsayılan `None` her paketi 1 olarak sayar (saf paket-sayım
+        taraması — ICMP flood, failed-TCP, DNS tunneling bu şekilde kullanır).
+        Exfiltration kuralı `weight_fn=lambda p: p.length` geçerek AYNI
+        pencereleme mekanizmasını byte-toplamı taraması için yeniden kullanır
+        (bkz. `_detect_exfiltration`) — mantığı iki kez yazmamak için.
+
+        `right` işaretçisi tüm tarama boyunca yalnızca ileri gider ve hiçbir
+        `left` adımında `left`'e sıfırlanmaz; bu yüzden toplam maliyet
+        O(N)'dir. (ICMP flood, failed-TCP, DNS tunneling kuralları arasında
+        paylaşılan bu döngünün eski, her-`left`-adımında-pencereyi-baştan-
+        tarayan hali, tek bir zaman penceresinde binlerce paketin biriktiği
+        yoğun trafikte O(N * pencere_boyutu)'ya -pratikte O(N^2)'ye-
+        yaklaşıyordu.)
+        """
+        weight = weight_fn or (lambda _pkt: 1)
+        left = 0
+        right = 0
+        n = len(sorted_pkts)
+        window_weight = 0.0
+
+        while left < n:
+            window_end = sorted_pkts[left].epoch_time + time_window
+            right = max(right, left)
+            while right < n and sorted_pkts[right].epoch_time < window_end:
+                window_weight += weight(sorted_pkts[right])
+                right += 1
+
+            if window_weight >= threshold:
+                yield left, right
+                for i in range(left, right):
+                    window_weight -= weight(sorted_pkts[i])
+                left = right
+            else:
+                window_weight -= weight(sorted_pkts[left])
+                left += 1
 
     @staticmethod
     def _scan_window_for_threshold(
@@ -114,28 +189,41 @@ class ThreatDetector:
         src_ip, dst_ip = ip_pair
 
         left = 0
+        right = 0
         n = len(sorted_pkts)
 
-        # Kayan pencere içindeki port sayıları ve ilk görülme zamanları
+        # Kayan pencere içindeki port sayıları. `right` tüm döngü boyunca
+        # yalnızca ileri gider (asla `left`'e sıfırlanmaz) ve `left`
+        # ilerlediğinde pencereden çıkan tek paket sayaçtan düşülür;
+        # böylece toplam maliyet O(N) amortized kalır. Önceki sürüm her
+        # `left` adımında pencereyi baştan tarıyordu (`right = left`),
+        # bu da yoğun trafikte (tek pencerede binlerce paket) O(N*W)'ye,
+        # pratikte O(N^2)'ye yaklaşan bir maliyete yol açıyordu.
         port_counts: dict[int, int] = defaultdict(int)
+
+        def _add(idx: int) -> None:
+            pkt = sorted_pkts[idx]
+            if pkt.dst_port is not None:
+                port_counts[pkt.dst_port] += 1
+
+        def _remove(idx: int) -> None:
+            pkt = sorted_pkts[idx]
+            if pkt.dst_port is not None:
+                port_counts[pkt.dst_port] -= 1
+                if port_counts[pkt.dst_port] <= 0:
+                    del port_counts[pkt.dst_port]
 
         while left < n:
             window_start_time = sorted_pkts[left].epoch_time
             window_end_time = window_start_time + time_window
 
-            port_counts.clear()
-
-            right = left
             while right < n and sorted_pkts[right].epoch_time < window_end_time:
-                pkt = sorted_pkts[right]
-                if pkt.dst_port is not None:
-                    port_counts[pkt.dst_port] += 1
+                _add(right)
                 right += 1
 
             distinct_ports = set(port_counts.keys())
             if len(distinct_ports) >= port_threshold:
                 window_packets = sorted_pkts[left:right]
-                window_ports = [p.dst_port for p in window_packets if p.dst_port is not None]
                 first_seen = window_packets[0].epoch_time
                 last_seen = window_packets[-1].epoch_time
 
@@ -170,8 +258,11 @@ class ThreatDetector:
 
                 # Bulgu üretildikten sonra aynı pencere/olay için tekrar çakışan
                 # bulgular üretmemek adına pointer'ı pencere dışına kaydır
+                for i in range(left, right):
+                    _remove(i)
                 left = right
             else:
+                _remove(left)
                 left += 1
 
         return findings
@@ -225,9 +316,12 @@ class ThreatDetector:
         pair_buckets: dict[tuple[str, str], list[PacketInfo]] = defaultdict(list)
 
         for pkt in packets:
-            if self._is_valid_transport_packet(pkt) and pkt.transport_protocol == "TCP":
-                if pkt.tcp_flags == "S":
-                    pair_buckets[(pkt.src_ip, pkt.dst_ip)].append(pkt)  # type: ignore[arg-type]
+            if (
+                self._is_valid_transport_packet(pkt)
+                and pkt.transport_protocol == "TCP"
+                and pkt.tcp_flags == "S"
+            ):
+                pair_buckets[(pkt.src_ip, pkt.dst_ip)].append(pkt)  # type: ignore[arg-type]
 
         for (src_ip, dst_ip), pair_packets in pair_buckets.items():
             unique_ports = {p.dst_port for p in pair_packets if p.dst_port is not None}
@@ -277,45 +371,32 @@ class ThreatDetector:
                 continue
 
             sorted_pkts = sorted(icmp_pkts, key=lambda p: p.epoch_time)
-            left = 0
-            n = len(sorted_pkts)
 
-            while left < n:
-                window_start = sorted_pkts[left].epoch_time
-                window_end = window_start + time_window
+            for left, right in self._slide_count_windows(sorted_pkts, time_window, threshold):
+                window_pkts = sorted_pkts[left:right]
+                count = len(window_pkts)
+                first_seen = window_pkts[0].epoch_time
+                last_seen = window_pkts[-1].epoch_time
 
-                right = left
-                while right < n and sorted_pkts[right].epoch_time < window_end:
-                    right += 1
-
-                count = right - left
-                if count >= threshold:
-                    window_pkts = sorted_pkts[left:right]
-                    first_seen = window_pkts[0].epoch_time
-                    last_seen = window_pkts[-1].epoch_time
-
-                    finding = ThreatFinding(
-                        rule_id="SEC-ICMP-FLOOD-001",
-                        title="ICMP Flood Saldırısı Tespiti",
-                        severity=ThreatSeverity.HIGH,
-                        description=(
-                            f"{src_ip} adresinden {dst_ip} adresine {time_window} saniye "
-                            f"içinde {count} adet ICMP paketi gönderildi."
-                        ),
-                        evidence={
-                            "packet_count": count,
-                            "time_window_seconds": time_window,
-                            "first_seen_epoch": first_seen,
-                            "last_seen_epoch": last_seen,
-                        },
-                        source=src_ip,
-                        destination=dst_ip,
-                        timestamp=first_seen,
-                    )
-                    findings.append(finding)
-                    left = right
-                else:
-                    left += 1
+                finding = ThreatFinding(
+                    rule_id="SEC-ICMP-FLOOD-001",
+                    title="ICMP Flood Saldırısı Tespiti",
+                    severity=ThreatSeverity.HIGH,
+                    description=(
+                        f"{src_ip} adresinden {dst_ip} adresine {time_window} saniye "
+                        f"içinde {count} adet ICMP paketi gönderildi."
+                    ),
+                    evidence={
+                        "packet_count": count,
+                        "time_window_seconds": time_window,
+                        "first_seen_epoch": first_seen,
+                        "last_seen_epoch": last_seen,
+                    },
+                    source=src_ip,
+                    destination=dst_ip,
+                    timestamp=first_seen,
+                )
+                findings.append(finding)
 
         logger.info("ICMP Flood kuralı tamamlandı. %d bulgu üretildi.", len(findings))
         return findings
@@ -366,47 +447,34 @@ class ThreatDetector:
                 continue
 
             sorted_failed = sorted(failed_syn_pkts, key=lambda p: p.epoch_time)
-            left = 0
-            n = len(sorted_failed)
 
-            while left < n:
-                window_start = sorted_failed[left].epoch_time
-                window_end = window_start + time_window
+            for left, right in self._slide_count_windows(sorted_failed, time_window, threshold):
+                window_pkts = sorted_failed[left:right]
+                count = len(window_pkts)
+                first_seen = window_pkts[0].epoch_time
+                last_seen = window_pkts[-1].epoch_time
+                target_ports = sorted({p.dst_port for p in window_pkts if p.dst_port})[:10]
 
-                right = left
-                while right < n and sorted_failed[right].epoch_time < window_end:
-                    right += 1
-
-                count = right - left
-                if count >= threshold:
-                    window_pkts = sorted_failed[left:right]
-                    first_seen = window_pkts[0].epoch_time
-                    last_seen = window_pkts[-1].epoch_time
-                    target_ports = sorted({p.dst_port for p in window_pkts if p.dst_port})[:10]
-
-                    finding = ThreatFinding(
-                        rule_id="SEC-FAILED-TCP-001",
-                        title="Yüksek Başarısız TCP Bağlantı Denemesi",
-                        severity=ThreatSeverity.MEDIUM,
-                        description=(
-                            f"{src_ip} adresinden {dst_ip} adresine {time_window} saniye "
-                            f"içinde {count} adet başarısız TCP bağlantı denemesi tespiti."
-                        ),
-                        evidence={
-                            "failed_attempt_count": count,
-                            "time_window_seconds": time_window,
-                            "first_seen_epoch": first_seen,
-                            "last_seen_epoch": last_seen,
-                            "sampled_target_ports": target_ports,
-                        },
-                        source=src_ip,
-                        destination=dst_ip,
-                        timestamp=first_seen,
-                    )
-                    findings.append(finding)
-                    left = right
-                else:
-                    left += 1
+                finding = ThreatFinding(
+                    rule_id="SEC-FAILED-TCP-001",
+                    title="Yüksek Başarısız TCP Bağlantı Denemesi",
+                    severity=ThreatSeverity.MEDIUM,
+                    description=(
+                        f"{src_ip} adresinden {dst_ip} adresine {time_window} saniye "
+                        f"içinde {count} adet başarısız TCP bağlantı denemesi tespiti."
+                    ),
+                    evidence={
+                        "failed_attempt_count": count,
+                        "time_window_seconds": time_window,
+                        "first_seen_epoch": first_seen,
+                        "last_seen_epoch": last_seen,
+                        "sampled_target_ports": target_ports,
+                    },
+                    source=src_ip,
+                    destination=dst_ip,
+                    timestamp=first_seen,
+                )
+                findings.append(finding)
 
         logger.info("Failed TCP Connections kuralı tamamlandı. %d bulgu üretildi.", len(findings))
         return findings
@@ -425,8 +493,7 @@ class ThreatDetector:
 
         for pkt in packets:
             if pkt.application_protocol == "DNS" and pkt.dns_query_name and pkt.src_ip:
-                parts = pkt.dns_query_name.split(".")
-                base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else pkt.dns_query_name
+                base_domain = self._compute_base_domain(pkt.dns_query_name)
                 domain_buckets[(pkt.src_ip, base_domain)].append(pkt)
 
         for (src_ip, base_domain), dns_pkts in domain_buckets.items():
@@ -434,53 +501,40 @@ class ThreatDetector:
                 continue
 
             sorted_pkts = sorted(dns_pkts, key=lambda p: p.epoch_time)
-            left = 0
-            n = len(sorted_pkts)
 
-            while left < n:
-                window_start = sorted_pkts[left].epoch_time
-                window_end = window_start + time_window
+            for left, right in self._slide_count_windows(sorted_pkts, time_window, query_threshold):
+                window_pkts = sorted_pkts[left:right]
+                count = len(window_pkts)
+                suspicious_count = sum(
+                    1 for p in window_pkts if p.dns_query_type in suspicious_qtypes
+                )
 
-                right = left
-                while right < n and sorted_pkts[right].epoch_time < window_end:
-                    right += 1
+                first_seen = window_pkts[0].epoch_time
+                last_seen = window_pkts[-1].epoch_time
+                sampled_queries = [p.dns_query_name for p in window_pkts[:5] if p.dns_query_name]
 
-                count = right - left
-                if count >= query_threshold:
-                    window_pkts = sorted_pkts[left:right]
-                    suspicious_count = sum(
-                        1 for p in window_pkts if p.dns_query_type in suspicious_qtypes
-                    )
-
-                    first_seen = window_pkts[0].epoch_time
-                    last_seen = window_pkts[-1].epoch_time
-                    sampled_queries = [p.dns_query_name for p in window_pkts[:5] if p.dns_query_name]
-
-                    finding = ThreatFinding(
-                        rule_id="SEC-DNS-TUNNEL-001",
-                        title="Şüpheli DNS Tünelleme Tespiti",
-                        severity=ThreatSeverity.CRITICAL,
-                        description=(
-                            f"{src_ip} adresi üzerinden {base_domain} alan adı için {time_window} "
-                            f"saniyede {count} adet DNS sorgusu (şüpheli tip sayısı: {suspicious_count}) tespiti."
-                        ),
-                        evidence={
-                            "base_domain": base_domain,
-                            "query_count": count,
-                            "suspicious_qtype_count": suspicious_count,
-                            "time_window_seconds": time_window,
-                            "first_seen_epoch": first_seen,
-                            "last_seen_epoch": last_seen,
-                            "sampled_queries": sampled_queries,
-                        },
-                        source=src_ip,
-                        destination=None,
-                        timestamp=first_seen,
-                    )
-                    findings.append(finding)
-                    left = right
-                else:
-                    left += 1
+                finding = ThreatFinding(
+                    rule_id="SEC-DNS-TUNNEL-001",
+                    title="Şüpheli DNS Tünelleme Tespiti",
+                    severity=ThreatSeverity.CRITICAL,
+                    description=(
+                        f"{src_ip} adresi üzerinden {base_domain} alan adı için {time_window} "
+                        f"saniyede {count} adet DNS sorgusu (şüpheli tip sayısı: {suspicious_count}) tespiti."
+                    ),
+                    evidence={
+                        "base_domain": base_domain,
+                        "query_count": count,
+                        "suspicious_qtype_count": suspicious_count,
+                        "time_window_seconds": time_window,
+                        "first_seen_epoch": first_seen,
+                        "last_seen_epoch": last_seen,
+                        "sampled_queries": sampled_queries,
+                    },
+                    source=src_ip,
+                    destination=None,
+                    timestamp=first_seen,
+                )
+                findings.append(finding)
 
         logger.info("DNS Tunneling kuralı tamamlandı. %d bulgu üretildi.", len(findings))
         return findings
@@ -574,31 +628,57 @@ class ThreatDetector:
         return findings
 
     def _detect_exfiltration(self, packets: list[PacketInfo]) -> list[ThreatFinding]:
-        """Aşırı dışa veri aktarımı (Data Exfiltration) durumlarını tespit eder."""
+        """Zaman penceresi içinde aşırı dışa veri aktarımı (Data Exfiltration) durumlarını tespit eder.
+
+        NOT: Önceki sürüm zaman penceresi kullanmıyordu; tüm capture boyunca
+        biriken toplam byte doğrudan eşikle karşılaştırılıyordu. Bu, saatlerce
+        süren bir capture'da tamamen sıradan bir indirme/video akışının bile
+        (örn. birkaç saatte 60 MB'lık bir işletim sistemi güncellemesi) 10
+        saniyede aynı hacmi bir C2'ye sızdıran bir saldırıyla AYNI CRITICAL
+        skoru üretmesine yol açıyordu — hacim hiçbir zaman hıza/zamana göre
+        değerlendirilmiyordu. Diğer kayan-pencere kurallarıyla (ICMP flood,
+        failed-TCP, DNS tunneling) aynı `_slide_count_windows` mekanizması
+        `weight_fn=lambda p: p.length` ile yeniden kullanılarak artık hacim,
+        sabit bir `config.EXFILTRATION_TIME_WINDOW_SECONDS` penceresi
+        İÇİNDE ölçülür; bu "kısa sürede yüksek hacim" olan gerçek sızdırma
+        davranışını "yavaş ve sürekli" sıradan trafikten ayırır.
+        """
         logger.info("Exfiltration kuralı çalıştırılıyor...")
         findings: list[ThreatFinding] = []
 
-        # (src_ip, dst_ip) -> total_bytes, first_seen, last_seen
-        exfil_map: dict[tuple[str, str], dict[str, float | int]] = defaultdict(
-            lambda: {"total_bytes": 0, "first_seen": float("inf"), "last_seen": 0.0}
-        )
-
-        for pkt in packets:
-            if pkt.src_ip and pkt.dst_ip and self._is_egress_traffic(pkt.src_ip, pkt.dst_ip):
-                entry = exfil_map[(pkt.src_ip, pkt.dst_ip)]
-                entry["total_bytes"] += pkt.length
-                if pkt.epoch_time < entry["first_seen"]:
-                    entry["first_seen"] = pkt.epoch_time
-                if pkt.epoch_time > entry["last_seen"]:
-                    entry["last_seen"] = pkt.epoch_time
-
+        time_window = config.EXFILTRATION_TIME_WINDOW_SECONDS
         threshold = config.EXFILTRATION_THRESHOLD
 
-        for (src_ip, dst_ip), data in exfil_map.items():
-            total_bytes = cast(int, data["total_bytes"])
-            if total_bytes >= threshold:
-                first_seen = cast(float, data["first_seen"])
-                last_seen = cast(float, data["last_seen"])
+        # (src_ip, dst_ip) -> list[PacketInfo] (yalnızca egress trafiği)
+        pair_buckets: dict[tuple[str, str], list[PacketInfo]] = defaultdict(list)
+
+        for pkt in packets:
+            if (
+                pkt.src_ip
+                and pkt.dst_ip
+                and pkt.epoch_time
+                and pkt.epoch_time > 0
+                and self._is_egress_traffic(pkt.src_ip, pkt.dst_ip)
+            ):
+                pair_buckets[(pkt.src_ip, pkt.dst_ip)].append(pkt)
+
+        for (src_ip, dst_ip), pair_packets in pair_buckets.items():
+            # Hızlı ön-eleme: bir pencerenin byte toplamı, tüm çiftin
+            # toplamını asla aşamaz; çiftin toplamı eşiğin altındaysa hiçbir
+            # pencere de eşiği geçemez (ICMP flood/failed-TCP kurallarındaki
+            # "len(...) < threshold: continue" ön-elemesiyle aynı desen).
+            if sum(p.length for p in pair_packets) < threshold:
+                continue
+
+            sorted_pkts = sorted(pair_packets, key=lambda p: p.epoch_time)
+
+            for left, right in self._slide_count_windows(
+                sorted_pkts, time_window, threshold, weight_fn=lambda p: p.length
+            ):
+                window_pkts = sorted_pkts[left:right]
+                total_bytes = sum(p.length for p in window_pkts)
+                first_seen = window_pkts[0].epoch_time
+                last_seen = window_pkts[-1].epoch_time
                 mb_size = total_bytes / (1024 * 1024)
 
                 finding = ThreatFinding(
@@ -606,13 +686,14 @@ class ThreatDetector:
                     title="Yüksek Hacimli Veri Sızdırma (Data Exfiltration) Tespiti",
                     severity=ThreatSeverity.CRITICAL,
                     description=(
-                        f"{src_ip} iç IP adresinden {dst_ip} dış IP adresine {mb_size:.2f} MB "
-                        "boyutunda şüpheli veri aktarımı tespiti yapıldı."
+                        f"{src_ip} iç IP adresinden {dst_ip} dış IP adresine {time_window} "
+                        f"saniye içinde {mb_size:.2f} MB boyutunda şüpheli veri aktarımı tespiti yapıldı."
                     ),
                     evidence={
                         "total_bytes": total_bytes,
                         "total_megabytes": round(mb_size, 2),
                         "threshold_bytes": threshold,
+                        "time_window_seconds": time_window,
                         "first_seen_epoch": first_seen,
                         "last_seen_epoch": last_seen,
                     },
