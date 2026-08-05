@@ -154,6 +154,35 @@ class PCAPParser:
         return tuple(results)
 
     @staticmethod
+    def _extract_dns_query_info(packet: Packet) -> tuple[str | None, str | None]:
+        """DNS paketlerinden (query ve response) sorgulanan domain adı ve kayıt tipini çıkarır."""
+        dns_layer = packet.getlayer(DNS)
+        if dns_layer is None:
+            return None, None
+
+        try:
+            if dns_layer.qd is None:
+                return None, None
+
+            query_name = dns_layer.qd.qname
+            if isinstance(query_name, bytes):
+                query_name = query_name.decode("utf-8", errors="ignore")
+            query_name = query_name.rstrip(".")
+            if not query_name:
+                query_name = None
+
+            qtype_val = dns_layer.qd.qtype
+            qtype_map = getattr(config, "DNS_QTYPE_MAP", {
+                1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 10: "NULL",
+                12: "PTR", 15: "MX", 16: "TXT", 28: "AAAA"
+            })
+            query_type = qtype_map.get(qtype_val, str(qtype_val)) if qtype_val is not None else None
+
+            return query_name, query_type
+        except (AttributeError, IndexError, UnicodeDecodeError):
+            return None, None
+
+    @staticmethod
     def _extract_tcp_flags(tcp_layer: TCP) -> str:
         """TCP bayraklarını metne dönüştürür."""
         try:
@@ -196,9 +225,13 @@ class PCAPParser:
 
         application_protocol = self._extract_application_protocol(packet, src_port, dst_port)
 
-        dns_answers = (
-            self._extract_dns_answers(packet) if application_protocol == "DNS" else ()
-        )
+        dns_answers = ()
+        dns_query_name = None
+        dns_query_type = None
+
+        if application_protocol == "DNS":
+            dns_answers = self._extract_dns_answers(packet)
+            dns_query_name, dns_query_type = self._extract_dns_query_info(packet)
 
         return PacketInfo(
             id=index,
@@ -214,6 +247,8 @@ class PCAPParser:
             dst_port=dst_port,
             tcp_flags=tcp_flags,
             dns_answers=dns_answers,
+            dns_query_name=dns_query_name,
+            dns_query_type=dns_query_type,
         )
 
     def parse(self) -> list[PacketInfo]:

@@ -1,3 +1,4 @@
+# tests/test_threat_detector.py
 """
 test_threat_detector.py - Threat Detector Framework Unit Testleri
 """
@@ -72,12 +73,12 @@ def test_threat_detector_with_dummy_packets():
     findings = detector.detect([dummy_packet])
 
     assert isinstance(findings, list)
-    assert len(findings) == 0  # Henüz kural eklenmediği için 0 olmalı
+    assert len(findings) == 0
 
 
 # --- Helper Function ---
 
-def _make_scan_packet(epoch_time, src_ip, dst_ip, dst_port, transport="TCP", packet_id=0):
+def _make_scan_packet(epoch_time, src_ip, dst_ip, dst_port, transport="TCP", packet_id=0, tcp_flags="S"):
     return PacketInfo(
         id=packet_id,
         epoch_time=epoch_time,
@@ -90,7 +91,7 @@ def _make_scan_packet(epoch_time, src_ip, dst_ip, dst_port, transport="TCP", pac
         length=60,
         src_port=54321,
         dst_port=dst_port,
-        tcp_flags="S" if transport == "TCP" else None,
+        tcp_flags=tcp_flags if transport == "TCP" else None,
     )
 
 
@@ -99,7 +100,7 @@ def _make_scan_packet(epoch_time, src_ip, dst_ip, dst_port, transport="TCP", pac
 def test_port_scan_detects_many_ports_in_short_window():
     """Config'deki zaman penceresi içinde yeterli sayıda farklı porta erişim Port Scan olarak algılanmalıdır."""
     packets = [
-        _make_scan_packet(1000.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 1000 + i)
+        _make_scan_packet(1000.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 1000 + i, tcp_flags="PA")
         for i in range(20)
     ]
     detector = ThreatDetector()
@@ -129,7 +130,7 @@ def test_port_scan_detects_udp_scan():
 def test_port_scan_works_with_generator_input():
     """detect() metoduna generator (Iterable) iletildiğinde doğru çalıştığını doğrular."""
     packet_generator = (
-        _make_scan_packet(1000.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 1000 + i)
+        _make_scan_packet(1000.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 1000 + i, tcp_flags="PA")
         for i in range(20)
     )
     detector = ThreatDetector()
@@ -142,7 +143,7 @@ def test_port_scan_works_with_generator_input():
 def test_port_scan_ignores_normal_traffic():
     """Aynı porta tekrar tekrar bağlanmak (normal davranış) bulgu üretmemeli."""
     packets = [
-        _make_scan_packet(1000.0 + i, "10.0.0.5", "10.0.0.10", 443)
+        _make_scan_packet(1000.0 + i, "10.0.0.5", "10.0.0.10", 443, tcp_flags="PA")
         for i in range(20)
     ]
     detector = ThreatDetector()
@@ -154,7 +155,7 @@ def test_port_scan_ignores_normal_traffic():
 def test_port_scan_below_threshold_not_flagged():
     """Eşiğin altında farklı port -> bulgu üretilmemeli."""
     packets = [
-        _make_scan_packet(1000.0 + i * 0.5, "10.0.0.5", "10.0.0.10", 2000 + i)
+        _make_scan_packet(1000.0 + i * 0.5, "10.0.0.5", "10.0.0.10", 2000 + i, tcp_flags="PA")
         for i in range(10)
     ]
     detector = ThreatDetector()
@@ -169,7 +170,7 @@ def test_port_scan_ports_spread_outside_window_not_flagged():
     arayla geldiği için HİÇBİR 60 saniyelik pencerede eşiğe ulaşılmaz.
     """
     packets = [
-        _make_scan_packet(1000.0 + i * 100.0, "10.0.0.5", "10.0.0.10", 3000 + i)
+        _make_scan_packet(1000.0 + i * 100.0, "10.0.0.5", "10.0.0.10", 3000 + i, tcp_flags="PA")
         for i in range(20)
     ]
     detector = ThreatDetector()
@@ -181,11 +182,11 @@ def test_port_scan_ports_spread_outside_window_not_flagged():
 def test_port_scan_multiple_attackers_produce_separate_findings():
     """İki farklı saldırgan aynı hedefi tararsa, her biri için ayrı bulgu üretilmeli."""
     attacker_1 = [
-        _make_scan_packet(1000.0 + i * 0.1, "10.0.0.5", "10.0.0.10", 1000 + i)
+        _make_scan_packet(1000.0 + i * 0.1, "10.0.0.5", "10.0.0.10", 1000 + i, tcp_flags="PA")
         for i in range(16)
     ]
     attacker_2 = [
-        _make_scan_packet(1000.0 + i * 0.1, "10.0.0.6", "10.0.0.10", 1000 + i)
+        _make_scan_packet(1000.0 + i * 0.1, "10.0.0.6", "10.0.0.10", 1000 + i, tcp_flags="PA")
         for i in range(16)
     ]
     detector = ThreatDetector()
@@ -229,12 +230,12 @@ def test_port_scan_multiple_bursts_same_pair_produce_multiple_findings():
     her patlama için AYRI bir bulgu üretilmeli.
     """
     burst_1 = [
-        _make_scan_packet(1000.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 1000 + i)
+        _make_scan_packet(1000.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 1000 + i, tcp_flags="PA")
         for i in range(16)
     ]
     # 200 saniyelik boşluk (time_window=60'tan büyük) -> ayrı bir olay
     burst_2 = [
-        _make_scan_packet(1300.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 2000 + i)
+        _make_scan_packet(1300.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 2000 + i, tcp_flags="PA")
         for i in range(16)
     ]
     detector = ThreatDetector()
@@ -244,6 +245,157 @@ def test_port_scan_multiple_bursts_same_pair_produce_multiple_findings():
     assert len(port_scan_findings) == 2
     timestamps = sorted(f.timestamp for f in port_scan_findings)
     assert timestamps[1] - timestamps[0] > config.PORT_SCAN_TIME_WINDOW_SECONDS
+
+
+# --- Diğer Tehdit Kuralları Testleri ---
+
+def test_syn_scan_detection():
+    """SYN taramasının tespit edildiğini doğrular."""
+    packets = [
+        _make_scan_packet(1000.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 1000 + i, tcp_flags="S")
+        for i in range(12)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(packets)
+
+    syn_scan_findings = [f for f in findings if f.rule_id == "SEC-SYN-SCAN-001"]
+    assert len(syn_scan_findings) == 1
+    assert syn_scan_findings[0].source == "10.0.0.5"
+
+
+def test_icmp_flood_detection():
+    """ICMP Flood tespiti test eder."""
+    packets = [
+        PacketInfo(
+            id=i,
+            epoch_time=1000.0 + i * 0.05,
+            src_ip="10.0.0.5",
+            dst_ip="10.0.0.10",
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="ICMP",
+            application_protocol=None,
+            length=64,
+            src_port=None,
+            dst_port=None,
+            tcp_flags=None,
+        )
+        for i in range(105)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(packets)
+
+    icmp_findings = [f for f in findings if f.rule_id == "SEC-ICMP-FLOOD-001"]
+    assert len(icmp_findings) == 1
+    assert icmp_findings[0].evidence["packet_count"] >= 100
+
+
+def test_dns_tunneling_detection():
+    """DNS tünelleme tespitini doğrular."""
+    packets = [
+        PacketInfo(
+            id=i,
+            epoch_time=1000.0 + i * 0.1,
+            src_ip="192.168.1.50",
+            dst_ip="8.8.8.8",
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="UDP",
+            application_protocol="DNS",
+            length=120,
+            src_port=53530,
+            dst_port=53,
+            tcp_flags=None,
+            dns_query_name=f"sub{i}.tunneldomain.com",
+            dns_query_type="TXT",
+        )
+        for i in range(35)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(packets)
+
+    dns_findings = [f for f in findings if f.rule_id == "SEC-DNS-TUNNEL-001"]
+    assert len(dns_findings) == 1
+    assert dns_findings[0].evidence["base_domain"] == "tunneldomain.com"
+
+
+def test_long_domain_detection():
+    """Anormal uzunluktaki domain tespiti."""
+    long_domain = "a" * 60 + ".com"
+    packet = PacketInfo(
+        id=1,
+        epoch_time=1000.0,
+        src_ip="192.168.1.50",
+        dst_ip="8.8.8.8",
+        is_ipv6=False,
+        network_protocol="IPv4",
+        transport_protocol="UDP",
+        application_protocol="DNS",
+        length=120,
+        src_port=53530,
+        dst_port=53,
+        tcp_flags=None,
+        dns_query_name=long_domain,
+        dns_query_type="A",
+    )
+    detector = ThreatDetector()
+    findings = detector.detect([packet])
+
+    long_findings = [f for f in findings if f.rule_id == "SEC-LONG-DOMAIN-001"]
+    assert len(long_findings) == 1
+
+
+def test_dga_domain_detection():
+    """DGA domain tespiti test eder."""
+    dga_domain = "cxzkjvhfzkjhfvkzjhdfv.com"
+    packet = PacketInfo(
+        id=1,
+        epoch_time=1000.0,
+        src_ip="192.168.1.50",
+        dst_ip="8.8.8.8",
+        is_ipv6=False,
+        network_protocol="IPv4",
+        transport_protocol="UDP",
+        application_protocol="DNS",
+        length=120,
+        src_port=53530,
+        dst_port=53,
+        tcp_flags=None,
+        dns_query_name=dga_domain,
+        dns_query_type="A",
+    )
+    detector = ThreatDetector()
+    findings = detector.detect([packet])
+
+    dga_findings = [f for f in findings if f.rule_id == "SEC-DGA-001"]
+    assert len(dga_findings) == 1
+
+
+def test_exfiltration_detection():
+    """Exfiltration (Veri sızdırma) tespiti test eder."""
+    packets = [
+        PacketInfo(
+            id=i,
+            epoch_time=1000.0 + i,
+            src_ip="192.168.1.50",
+            dst_ip="93.184.216.34",  # Public IP
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="TCP",
+            application_protocol=None,
+            length=10 * 1024 * 1024,  # 10 MB
+            src_port=54321,
+            dst_port=443,
+            tcp_flags="PA",
+        )
+        for i in range(6)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(packets)
+
+    exfil_findings = [f for f in findings if f.rule_id == "SEC-EXFIL-001"]
+    assert len(exfil_findings) == 1
+    assert exfil_findings[0].evidence["total_megabytes"] >= 50.0
 
 
 # --- _is_valid_transport_packet Parametrik Testleri ---

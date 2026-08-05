@@ -28,6 +28,24 @@ PORT_SCAN_TIME_WINDOW_SECONDS: int = 60
 PORT_SCAN_PORT_THRESHOLD: int = 15
 
 # --------------------------------------------------------------------
+# Threat Detection: Diğer Kurallar
+# --------------------------------------------------------------------
+SYN_SCAN_TIME_WINDOW_SECONDS: int = 60
+SYN_SCAN_PORT_THRESHOLD: int = 10
+
+ICMP_FLOOD_TIME_WINDOW_SECONDS: int = 10
+ICMP_FLOOD_PACKET_THRESHOLD: int = 100
+
+FAILED_TCP_TIME_WINDOW_SECONDS: int = 60
+FAILED_TCP_ATTEMPT_THRESHOLD: int = 20
+
+DNS_TUNNEL_TIME_WINDOW_SECONDS: int = 60
+DNS_TUNNEL_QUERY_COUNT_THRESHOLD: int = 30
+DNS_TUNNEL_SUSPICIOUS_QTYPES: tuple[str, ...] = ("TXT", "NULL", "CNAME")
+
+DGA_MIN_LABEL_LENGTH: int = 12
+
+# --------------------------------------------------------------------
 # Threat Intelligence
 # --------------------------------------------------------------------
 # 1. Threat Intelligence Timeout
@@ -99,6 +117,18 @@ PROTOCOL_MAP = {
     103: "PIM",
     112: "VRRP",
     132: "SCTP",
+}
+
+DNS_QTYPE_MAP = {
+    1: "A",
+    2: "NS",
+    5: "CNAME",
+    6: "SOA",
+    10: "NULL",
+    12: "PTR",
+    15: "MX",
+    16: "TXT",
+    28: "AAAA",
 }
 
 UNKNOWN_PROTOCOL = "OTHER"

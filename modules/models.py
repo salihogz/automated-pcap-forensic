@@ -38,6 +38,11 @@ class PacketInfo:
     # varsayılan değer tüm örnekler arasında güvenle paylaşılabilmelidir.
     dns_answers: tuple[tuple[str, str], ...] = ()
 
+    # Hem DNS query hem DNS response paketlerinde sorgulanan domain adı
+    # ve kayıt tipini tutan alanlar.
+    dns_query_name: str | None = None
+    dns_query_type: str | None = None
+
     def to_dict(self) -> dict:
         """Nesneyi dictionary yapısına dönüştürür (Raporlama ve Jinja2 için)."""
         return asdict(self)
