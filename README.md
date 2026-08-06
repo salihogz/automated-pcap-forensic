@@ -1,8 +1,34 @@
 # Automated PCAP Forensic Analysis Tool
 
+[![CI](https://github.com/salihogz/automated-pcap-forensic/actions/workflows/ci.yml/badge.svg)](https://github.com/salihogz/automated-pcap-forensic/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.14-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 > An automated PCAP/PCAPNG forensic analysis tool developed in Python for Digital Forensics & Incident Response (DFIR) and Network Security.
 
 > **Project Status:** ✅ Production-Ready (Core Features Completed)
+
+---
+
+## The Report
+
+A single self-contained HTML file — no external references, no internet required. Every screenshot below is generated from the demo capture in this repository:
+
+```bash
+python main.py -f samples/malicious/demo_capture.pcapng
+```
+
+**Executive summary and traffic overview** — including the SHA-256 of the source file for chain of custody:
+
+![Report overview](docs/report-overview.png)
+
+**Threat findings** — every finding carries the evidence it was derived from (counts, time window, first/last seen, sampled values), so a reviewer can check the engine's reasoning rather than trusting a verdict:
+
+![Threat findings](docs/report-findings.png)
+
+**Weighted risk summary:**
+
+![Risk summary](docs/report-risk.png)
 
 ---
 
@@ -46,8 +72,8 @@ OTX_API_KEY=your_otx_key
 ## Usage
 
 ```bash
-# Analyze a specific capture
-python main.py -f samples/malicious/capture.pcapng
+# Analyze the demo capture shipped with the repository
+python main.py -f samples/malicious/demo_capture.pcapng
 
 # No -f: the first capture found under samples/ (searched recursively) is used
 python main.py
@@ -65,7 +91,17 @@ The HTML report is written to `reports/<clean|malicious>/<capture-name>_report.h
 
 The report is fully self-contained — charts are embedded as base64, so it has **no external references** and can be opened offline on an air-gapped forensic workstation.
 
-Capture files under `samples/` are gitignored; only `.gitkeep` is tracked, so a fresh checkout contains no sample captures.
+### The demo capture
+
+`samples/malicious/demo_capture.pcapng` is committed to the repository so the tool can be run immediately after cloning. It is **synthetic**: every address is from RFC 5737 (TEST-NET) or RFC 1918, so none of it can belong to a real host. It deliberately triggers 7 of the 8 detection rules, and also contains ordinary DNS/NTP response traffic as a regression guard against the port-scan false positive.
+
+Regenerate it (deterministic — same bytes every run) with:
+
+```bash
+python scripts/generate_sample_capture.py
+```
+
+Any other capture you drop under `samples/` is gitignored, so your own traffic never gets committed by accident.
 
 ---
 
@@ -120,11 +156,15 @@ Automated-PCAP-Forensic/
 ├── templates/               # report.html.j2 (Jinja2 view layer)
 ├── tests/                   # pytest suite + snapshots/
 ├── reports/                 # generated HTML reports (gitignored)
-├── samples/                 # clean/ and malicious/ capture files (gitignored)
+├── samples/                 # captures (gitignored, except the synthetic demo)
+├── scripts/                 # generate_sample_capture.py
+├── docs/                    # README screenshots
 ├── static/
 ├── logs/                    # analysis.log (gitignored)
+├── .github/workflows/       # CI (ruff + pytest on every push)
 ├── config.py                # thresholds, windows, paths, API config
 ├── main.py                  # CLI entry point / pipeline orchestration
+├── pyproject.toml           # ruff / pytest / coverage configuration
 ├── requirements.txt         # runtime dependencies
 ├── requirements-dev.txt     # test & lint dependencies
 └── README.md
@@ -182,18 +222,28 @@ ruff check .                                        # lint
 ruff format .                                       # format
 ```
 
-**Current status:** 137 / 137 tests passing · 89% coverage across `modules/`
+Ruff and pytest are configured in `pyproject.toml`; CI runs both on every push.
+
+**Current status:** 137 / 137 tests passing · **79%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
-| `modules/statistics.py` | 99% |
-| `modules/threat_detector.py` | 95% |
-| `modules/models.py` | 93% |
-| `modules/reporter.py` | 88% |
-| `modules/threat_intel.py` | 87% |
-| `modules/parser.py` | 77% |
+| `config.py` | 100% |
+| `modules/models.py` | 94% |
+| `modules/threat_detector.py` | 93% |
+| `modules/statistics.py` | 91% |
+| `modules/reporter.py` | 84% |
+| `modules/threat_intel.py` | 82% |
+| `modules/parser.py` | 75% |
+| `main.py` | **0%** |
 
-`main.py` is currently covered only indirectly and is a known gap in the test suite.
+`main.py` has no tests at all — it is the pipeline's orchestration layer and the largest known gap in the suite. `parser.py` is the next priority: it handles untrusted input, so it is the module that most deserves high coverage.
+
+The reporter has a snapshot test against `tests/snapshots/report_snapshot.html`. When a template change is intentional, regenerate the baseline instead of hand-editing it, then review the diff:
+
+```bash
+UPDATE_SNAPSHOT=1 pytest tests/test_reporter.py -k snapshot
+```
 
 ---
 
