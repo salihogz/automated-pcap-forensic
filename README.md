@@ -229,7 +229,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 248 / 248 tests passing · **93%** total coverage (branch coverage enabled)
+**Current status:** 250 / 250 tests passing · **93%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |

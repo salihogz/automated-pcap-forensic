@@ -1262,3 +1262,48 @@ def test_report_declares_viewport_for_responsive_css(
 
     # Erişilebilirlik: her th'nin scope'u olmalı (TI tablosunda eksikti).
     assert all(th.get("scope") for th in soup.find_all("th"))
+
+
+def test_https_card_counts_quic_alongside_tls():
+    """HTTPS kartı QUIC'i de saymalı.
+
+    Regresyon: kart yalnızca `application_protocol_distribution["TLS"]`
+    gösteriyor ama "TLS (HTTPS)" diye etiketleniyordu. HTTPS iki taşıma
+    üzerinde koşar -- TLS (TCP) ve QUIC (UDP / HTTP-3) -- dolayısıyla QUIC'in
+    ağırlıklı olduğu modern trafikte kart HTTPS hacmini olduğundan az
+    gösteriyordu.
+    """
+    stats = GeneralStatistics(
+        total_packets=236843, total_bytes=0,
+        first_packet_time=1.0, last_packet_time=2.0, capture_duration=1.0,
+        protocol_distribution={"TLS": 233136, "QUIC": 3353},
+        network_protocol_distribution={"IPv4": 236843},
+        transport_protocol_distribution={"TCP": 233136, "UDP": 3707},
+        application_protocol_distribution={"TLS": 233136, "QUIC": 3353, "DNS": 328},
+        top_bandwidth_hosts=[], top_source_ips=[], top_destination_ips=[],
+        top_tcp_ports=[], top_udp_ports=[], timeline={},
+    )
+
+    prepared = r._prepare_statistics_for_template(stats)
+
+    assert prepared["tls_count"] == 233136
+    assert prepared["quic_count"] == 3353
+
+
+def test_https_card_renders_both_transports(
+    real_template_dir: Path, tmp_path: Path, populated_statistics: GeneralStatistics
+):
+    """Kart etiketi ve değeri her iki taşımayı da göstermeli."""
+    pcap_source = tmp_path / "https_card.pcap"
+    pcap_source.write_bytes(b"\xd4\xc3\xb2\xa1")
+
+    html = r.Reporter(template_dir=real_template_dir).generate(
+        statistics=populated_statistics,
+        findings=[],
+        threat_intel={},
+        source_file=pcap_source,
+        analysis_duration=1.0,
+    ).read_text(encoding="utf-8")
+
+    assert "TLS / QUIC (HTTPS)" in html
+    assert "TLS (HTTPS)" not in html

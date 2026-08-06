@@ -77,7 +77,7 @@ Data contracts live in `modules/models.py` and are shared across every stage: `P
 
 ## Testing conventions
 
-- 248 tests across `tests/test_{main,parser,statistics,threat_detector,threat_intel,reporter}.py`, no `conftest.py` — fixtures are defined locally per test file.
+- 250 tests across `tests/test_{main,parser,statistics,threat_detector,threat_intel,reporter}.py`, no `conftest.py` — fixtures are defined locally per test file.
 - Tests must never write into the project tree. `Reporter.generate()` derives its output path from `config.REPORTS_DIR`, so any test that calls it has to monkeypatch that attribute (`test_reporter.py` does it via an autouse `isolated_reports_dir` fixture, `test_main.py` inline); without it every run left artifacts in the real `reports/clean/`.
 - `tests/snapshots/report_snapshot.html` is used for reporter snapshot-style assertions.
 - Samples for manual/integration testing live under `samples/clean/` and `samples/malicious/`; actual `.pcap`/`.pcapng` files are gitignored (only `.gitkeep` is tracked) — don't assume a sample file exists in a fresh checkout.

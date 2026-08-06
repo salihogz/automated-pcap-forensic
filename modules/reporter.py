@@ -539,7 +539,13 @@ def _prepare_statistics_for_template(stats: GeneralStatistics) -> dict[str, Any]
         "udp_count": trans.get("UDP", 0),
         "http_count": app.get("HTTP", 0),
         "dns_count": app.get("DNS", 0),
+        # HTTPS trafiği iki farklı taşıma üzerinde koşar: TLS (TCP) ve QUIC
+        # (UDP, HTTP/3). Kart yalnızca TLS'i gösterip "(HTTPS)" diye
+        # etiketlendiğinde, QUIC'in ağırlıklı olduğu modern trafikte HTTPS
+        # hacmi olduğundan az görünüyordu — ölçülen bir capture'da 233.136 TLS
+        # yanında 3.353 QUIC paketi kartta hiç yer almıyordu.
         "tls_count": app.get("TLS", 0),
+        "quic_count": app.get("QUIC", 0),
     }
 
 

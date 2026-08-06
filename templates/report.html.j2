@@ -350,9 +350,9 @@
                 </div>
             </div>
             <div class="card">
-                <div class="label">TLS (HTTPS)</div>
+                <div class="label" title="HTTPS iki taşıma üzerinde koşar: TLS (TCP) ve QUIC (UDP / HTTP-3).">TLS / QUIC (HTTPS)</div>
                 <div class="value" style="font-size:15px;">
-                    {{ statistics.tls_count_formatted|default(statistics.tls_count|default(0)) }}
+                    {{ statistics.tls_count_formatted|default(statistics.tls_count|default(0)) }} / {{ statistics.quic_count_formatted|default(statistics.quic_count|default(0)) }}
                 </div>
             </div>
         </div>
