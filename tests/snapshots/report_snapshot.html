@@ -156,7 +156,18 @@ adları) satır sonuna gelince sarmalanmak yerine kutunun dışına taşıp
 kırpılıyordu -- yani KANIT sütunundaki delil sessizce okunamaz hale
 geliyordu. overflow-wrap: anywhere ise bu dizilerin herhangi bir
 noktadan bölünmesine izin verir. */
-.evidence-val { overflow-wrap: anywhere; text-align: right; flex: 1 1 auto; min-width: 55%; }
+/* white-space: pre-line -> reporter._format_evidence_value liste tipindeki
+kanıtları (alan adları, örneklenen sorgular/portlar) "\n" ile ayırarak
+düz metin döndürür; bu kural o satır sonlarını görünür kılar. HTML
+üretmek yerine düz metin + CSS tercih edildi ki Jinja autoescape devrede
+kalsın (kanıt verisi capture'dan gelir, güvenilmez girdidir). */
+.evidence-val {
+overflow-wrap: anywhere;
+text-align: right;
+flex: 1 1 auto;
+min-width: 55%;
+white-space: pre-line;
+}
 .finding-title {
 font-weight: 600;
 color: var(--text);
@@ -210,7 +221,7 @@ section { page-break-inside: avoid; margin-bottom: 20px; }
 <p>
 snapshot.pcap &nbsp;•&nbsp;
 Oluşturulma: 2026-01-01 00:00:00 &nbsp;•&nbsp;
-Tool: v1.2.0-forensic
+Tool: v1.2.0
 </p>
 </header>
 <main>
@@ -405,15 +416,15 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </div>
 </section>
 <section id="port_distribution">
-<h2>5. Port Dağılımı</h2>
+<h2>5. TCP Port Dağılımı</h2>
 <p class="chart-desc">Trafikte en sık hedef alınan ve kullanılan ilk TCP portlarının paket yoğunluğu.</p>
 <div class="chart-container">
 <div class="chart-box">
-<img src="data:image/png;base64,SNAPSHOT_BASE64_PLACEHOLDER" alt="Port Dağılımı">
+<img src="data:image/png;base64,SNAPSHOT_BASE64_PLACEHOLDER" alt="TCP Port Dağılımı">
 </div>
 <div class="table-scroll">
 <table>
-<caption>Port Dağılımı - Özet Veri Tablosu</caption>
+<caption>TCP Port Dağılımı - Özet Veri Tablosu</caption>
 <thead>
 <tr>
 <th scope="col">Parametre / Etiket</th>
@@ -434,8 +445,38 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </div>
 </div>
 </section>
+<section id="udp_port_distribution">
+<h2>6. UDP Port Dağılımı</h2>
+<p class="chart-desc">UDP üzerinde en sık görülen portlar (DNS, DHCP, NTP, QUIC/HTTP3 vb.) ve paket yoğunlukları.</p>
+<div class="chart-container">
+<div class="chart-box">
+<img src="data:image/png;base64,SNAPSHOT_BASE64_PLACEHOLDER" alt="UDP Port Dağılımı">
+</div>
+<div class="table-scroll">
+<table>
+<caption>UDP Port Dağılımı - Özet Veri Tablosu</caption>
+<thead>
+<tr>
+<th scope="col">Parametre / Etiket</th>
+<th scope="col">Paket Sayısı</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Port 53</td>
+<td><strong>1,000</strong></td>
+</tr>
+<tr>
+<td>Port 123</td>
+<td><strong>500</strong></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
 <section id="timeline">
-<h2>6. Zaman Çizelgesi (Paket Trafiği)</h2>
+<h2>7. Zaman Çizelgesi (Paket Trafiği)</h2>
 <p class="chart-desc">Analiz edilen zaman aralığı boyunca ağ trafiğinde meydana gelen anlık yoğunlaşma ve dalgalanmalar.</p>
 <div class="chart-container">
 <div class="chart-box">
@@ -467,7 +508,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 <!-- 3. Tehdit Bulguları -->
 <section>
 <h2>
-7. Tehdit Bulguları
+8. Tehdit Bulguları
 (1 desen)
 </h2>
 <table>
@@ -516,14 +557,14 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </section>
 <!-- Threat Intelligence -->
 <section>
-<h2>8. Threat Intelligence Sonuçları</h2>
+<h2>9. Threat Intelligence Sonuçları</h2>
 <div class="empty-state">
 Threat Intelligence sonucu bulunmamaktadır.
 </div>
 </section>
 <!-- 4. Genel Risk Özeti -->
 <section>
-<h2>9. Genel Risk Özeti</h2>
+<h2>10. Genel Risk Özeti</h2>
 <div class="risk-banner high">
 <div class="risk-header">
 <div>
@@ -564,6 +605,6 @@ Threat Intelligence sonucu bulunmamaktadır.
 </section>
 </main>
 <footer>
-Automated PCAP Forensic Analysis Tool — Reporter v1.2.0-forensic | Rapor Oluşturulma: 2026-01-01 00:00:00</footer>
+Automated PCAP Forensic Analysis Tool — Reporter v1.2.0 | Rapor Oluşturulma: 2026-01-01 00:00:00</footer>
 </body>
 </html>

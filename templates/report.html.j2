@@ -165,7 +165,18 @@
        kırpılıyordu -- yani KANIT sütunundaki delil sessizce okunamaz hale
        geliyordu. overflow-wrap: anywhere ise bu dizilerin herhangi bir
        noktadan bölünmesine izin verir. */
-    .evidence-val { overflow-wrap: anywhere; text-align: right; flex: 1 1 auto; min-width: 55%; }
+    /* white-space: pre-line -> reporter._format_evidence_value liste tipindeki
+       kanıtları (alan adları, örneklenen sorgular/portlar) "\n" ile ayırarak
+       düz metin döndürür; bu kural o satır sonlarını görünür kılar. HTML
+       üretmek yerine düz metin + CSS tercih edildi ki Jinja autoescape devrede
+       kalsın (kanıt verisi capture'dan gelir, güvenilmez girdidir). */
+    .evidence-val {
+        overflow-wrap: anywhere;
+        text-align: right;
+        flex: 1 1 auto;
+        min-width: 55%;
+        white-space: pre-line;
+    }
 
     .finding-title {
         font-weight: 600;
@@ -424,8 +435,15 @@
                         {% set sev = finding.severity_str|default(finding.severity)|string|upper %}
                         <span class="badge {{ sev }}">{{ sev }}</span>
                     </td>
-                    <td>{{ finding.source_display|default(finding.source)|default('-') }}</td>
-                    <td>{{ finding.destination_display|default(finding.destination)|default('-') }}</td>
+                    {# `default(x)` yalnızca değişken TANIMSIZ olduğunda devreye
+                       girer; alan tanımlı ama None ise Jinja "None" metnini
+                       basar. Bir adli raporda hedef alanı boş olan bulgular
+                       (DNS tünelleme, DGA, uzun alan adı: tekil bir hedef IP'si
+                       yoktur) tablo hücresinde düz "None" olarak görünüyordu.
+                       İkinci argüman `true`, filtreyi "yanlış/boş değerlerde de
+                       uygula" moduna alır. #}
+                    <td>{{ finding.source_display|default(finding.source, true)|default('-', true) }}</td>
+                    <td>{{ finding.destination_display|default(finding.destination, true)|default('-', true) }}</td>
                     <td>
                         {% if finding.title %}
                         <div class="finding-title">{{ finding.title }}</div>

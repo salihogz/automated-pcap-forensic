@@ -51,6 +51,23 @@ def test_core_models_structural_contract():
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def isolated_reports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Rapor çıktılarını testin geçici dizinine yönlendirir.
+
+    `Reporter.generate()` çıktı yolunu `config.REPORTS_DIR`'dan türetir; testler
+    kaynak pcap'i tmp_path'te üretse bile rapor PROJENİN gerçek `reports/`
+    dizinine yazılıyordu. Sonuç: her `pytest` çalışması depoya
+    `reports/clean/test_report.html`, `snapshot_report.html` gibi artefaktlar
+    bırakıyordu ve bir testin çıktısı bir sonraki koşuda hâlâ oradaydı
+    (testler arası sızıntı). Autouse: tek bir testin bunu atlaması yeterince
+    kirlilik yaratacağı için opt-in bırakılmadı.
+    """
+    reports_dir = tmp_path / "reports"
+    monkeypatch.setattr(r.config, "REPORTS_DIR", reports_dir)
+    return reports_dir
+
+
 @pytest.fixture
 def real_template_dir() -> Path:
     candidates = [
@@ -314,12 +331,12 @@ class TestRiskSummaryAndChartBuilderUnits:
         assert r.compute_risk_summary([]).risk_score_normalized == 0
 
     def test_build_charts_list_exact_count_and_titles(self, populated_statistics: GeneralStatistics):
-        """Directly tests Reporter._build_charts_list to verify exact count (5) and keywords in titles."""
+        """Directly tests Reporter._build_charts_list to verify exact count (6) and keywords in titles."""
         reporter = r.Reporter()
         charts = reporter._build_charts_list(populated_statistics)
 
         assert isinstance(charts, list)
-        assert len(charts) == 5
+        assert len(charts) == 6
 
         # Extract chart titles assuming dataclass/object or dict representation
         titles = [getattr(c, "title", c.get("title") if isinstance(c, dict) else None) for c in charts]
@@ -329,7 +346,13 @@ class TestRiskSummaryAndChartBuilderUnits:
         assert any("En Aktif Hostlar" in str(t) or "Talkers" in str(t) for t in titles if t)
         assert any("Bant Genişliği" in str(t) or "Bandwidth" in str(t) for t in titles if t)
         assert any("Zaman" in str(t) or "Timeline" in str(t) for t in titles if t)
-        assert any("Port" in str(t) for t in titles if t)
+        # TCP ve UDP port dağılımları ayrı bölümler olarak üretilmeli:
+        # `top_udp_ports` istatistikte hesaplanıp raporda hiç gösterilmiyordu.
+        assert "TCP Port Dağılımı" in titles
+        assert "UDP Port Dağılımı" in titles
+
+        chart_ids = [c.id for c in charts]
+        assert chart_ids.count("udp_port_distribution") == 1
 
     def test_chart_builder_individual_charts(self, populated_statistics: GeneralStatistics):
         """Tests individual chart building methods using stateless ChartBuilder and explicit parameters."""
@@ -652,3 +675,179 @@ class TestPipelineIntegration:
         assert "90%" in html
         assert "botnet" in html
         assert "7" in html
+
+
+# ---------------------------------------------------------------------------
+# 9. Sürüm Tutarlılığı
+# ---------------------------------------------------------------------------
+
+
+def test_tool_version_is_consistent_across_project():
+    """Rapordaki araç sürümü, config ve pyproject ile aynı olmalı.
+
+    Regresyon: bir zamanlar üç ayrı yerde üç FARKLI sürüm vardı
+    (main.py banner "1.1.0-refactored", pyproject "1.2.0",
+    reporter "1.2.0-forensic"). Rapordaki "Araç Sürümü" adli bir belgenin
+    parçası olduğu için hangi sürümün üretildiği tek anlamlı olmalıdır.
+    """
+    import tomllib
+
+    import config
+
+    assert r._TOOL_VERSION == config.TOOL_VERSION
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    with pyproject.open("rb") as fh:
+        declared = tomllib.load(fh)["project"]["version"]
+
+    assert declared == config.TOOL_VERSION, (
+        f"pyproject.toml sürümü ({declared}) config.TOOL_VERSION ile "
+        f"({config.TOOL_VERSION}) uyuşmuyor."
+    )
+
+
+def test_reports_are_written_under_configured_reports_dir(
+    real_template_dir: Path, tmp_path: Path, populated_statistics: GeneralStatistics,
+    isolated_reports_dir: Path,
+):
+    """Rapor DAİMA config.REPORTS_DIR altına yazılmalı.
+
+    Regresyon: testler pcap'i tmp_path'te üretiyor ama Reporter çıktıyı
+    projenin gerçek reports/ dizinine yazıyordu; her pytest koşusu depoya
+    artefakt bırakıyordu (bkz. isolated_reports_dir fixture'ı).
+    """
+    pcap_source = tmp_path / "malicious" / "izolasyon.pcap"
+    pcap_source.parent.mkdir(parents=True, exist_ok=True)
+    pcap_source.write_bytes(b"\xd4\xc3\xb2\xa1")
+
+    reporter = r.Reporter(template_dir=real_template_dir)
+    output_report = reporter.generate(
+        statistics=populated_statistics,
+        findings=[],
+        threat_intel={},
+        source_file=pcap_source,
+        analysis_duration=1.0,
+    )
+
+    assert output_report == isolated_reports_dir / "malicious" / "izolasyon_report.html"
+    assert output_report.is_relative_to(tmp_path)
+
+
+def test_finding_without_destination_renders_dash_not_none(
+    real_template_dir: Path, tmp_path: Path, populated_statistics: GeneralStatistics
+):
+    """Hedefi olmayan bulgular tabloda "-" göstermeli, "None" değil.
+
+    Regresyon: Jinja2'nin `default()` filtresi yalnızca değişken TANIMSIZ
+    olduğunda devreye girer. `destination` alanı tanımlı ama None olan
+    bulgularda (DNS tünelleme, DGA, uzun alan adı — tekil bir hedef IP'leri
+    yoktur) şablon hücreye düz "None" yazıyordu.
+    """
+    finding = ThreatFinding(
+        rule_id="SEC-DGA-001",
+        title="Şüpheli DGA Alan Adı Tespiti",
+        severity=ThreatSeverity.HIGH,
+        description="Yüksek entropili alan adları tespit edildi.",
+        evidence={"total_dga_domains": 3},
+        source="VARIOUS",
+        destination=None,
+        timestamp=1609459200.0,
+    )
+    pcap_source = tmp_path / "dga.pcap"
+    pcap_source.write_bytes(b"\xd4\xc3\xb2\xa1")
+
+    reporter = r.Reporter(template_dir=real_template_dir)
+    html = reporter.generate(
+        statistics=populated_statistics,
+        findings=[finding],
+        threat_intel={},
+        source_file=pcap_source,
+        analysis_duration=1.0,
+    ).read_text(encoding="utf-8")
+
+    assert ">None<" not in html
+    soup = BeautifulSoup(html, "html.parser")
+    row = soup.select_one("table tbody tr:has(td)")
+    cells = [td.get_text(strip=True) for td in soup.find_all("td")]
+    assert "-" in cells
+    assert "None" not in cells
+    assert row is not None
+
+
+def test_list_evidence_is_not_rendered_as_python_repr(
+    real_template_dir: Path, tmp_path: Path, populated_statistics: GeneralStatistics
+):
+    """Liste tipindeki kanıtlar ham Python repr'ı olarak basılmamalı.
+
+    Regresyon: şablon `{{ val }}` ile listeyi doğrudan bastığı için
+    SEC-DGA-001 / SEC-LONG-DOMAIN-001 bulgularının "Kanıt" hücresinde
+    `[{'domain': '...', 'length': 72, 'src_ip': '10.0.0.66',
+    'timestamp': 1772355840.0}, ...]` şeklinde süslü parantezli, tırnaklı ve
+    ham epoch'lu bir blok görünüyordu.
+    """
+    finding = ThreatFinding(
+        rule_id="SEC-DGA-001",
+        title="Şüpheli DGA Alan Adı Tespiti",
+        severity=ThreatSeverity.HIGH,
+        description="Yüksek entropili alan adları.",
+        evidence={
+            "total_dga_domains": 2,
+            "domains": [
+                {
+                    "domain": "xk3n9vq2mz.example.com",
+                    "label": "xk3n9vq2mz",
+                    "entropy": 3.9,
+                    "src_ip": "10.0.0.66",
+                    "timestamp": 1609459200.0,
+                },
+                {
+                    "domain": "qp7wt4bz1r.example.com",
+                    "label": "qp7wt4bz1r",
+                    "entropy": 4.1,
+                    "src_ip": "10.0.0.66",
+                    "timestamp": 1609459260.0,
+                },
+            ],
+            "sampled_ports": [21, 22, 443],
+        },
+        source="VARIOUS",
+        destination=None,
+        timestamp=1609459200.0,
+    )
+    pcap_source = tmp_path / "dga_evidence.pcap"
+    pcap_source.write_bytes(b"\xd4\xc3\xb2\xa1")
+
+    reporter = r.Reporter(template_dir=real_template_dir)
+    html = reporter.generate(
+        statistics=populated_statistics,
+        findings=[finding],
+        threat_intel={},
+        source_file=pcap_source,
+        analysis_duration=1.0,
+    ).read_text(encoding="utf-8")
+
+    # Python repr'ının imzaları hiç görünmemeli.
+    for artifact in ("{'domain'", "'src_ip':", "'entropy':", "[{", "}]"):
+        assert artifact not in html, f"ham Python repr sızdı: {artifact}"
+
+    # Veri KAYBOLMAMALI: alan adları ve okunabilir etiketler yerinde olmalı.
+    assert "xk3n9vq2mz.example.com" in html
+    assert "qp7wt4bz1r.example.com" in html
+    assert "Alan Adı:" in html
+    assert "Entropi:" in html
+    # Kayıt içindeki epoch, diğer kanıt zamanlarıyla aynı biçime çevrilmeli.
+    assert "2021-01-01 00:00:00 UTC" in html
+    # Skaler liste de köşeli parantezsiz görünmeli.
+    assert "[21, 22, 443]" not in html
+
+
+def test_format_evidence_value_shapes():
+    """_format_evidence_value: liste/sözlük/skaler davranışları."""
+    assert r._format_evidence_value(42) == 42
+    assert r._format_evidence_value("metin") == "metin"
+    assert r._format_evidence_value([]) == "-"
+    assert r._format_evidence_value(["a", "b"]) == "a\nb"
+    assert r._format_evidence_value((21, 22)) == "21\n22"
+
+    rendered = r._format_evidence_value([{"domain": "a.com", "timestamp": 1609459200.0}])
+    assert rendered == "Alan Adı: a.com · Zaman: 2021-01-01 00:00:00 UTC"

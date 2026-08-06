@@ -62,7 +62,10 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATE_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "templates"
 _TEMPLATE_NAME: Final[str] = "report.html.j2"
-_TOOL_VERSION: Final[str] = "1.2.0-forensic"
+# Sürüm tek kaynaktan (config) okunur; rapordaki "Araç Sürümü" alanı adli bir
+# belgenin parçası olduğu için bu değerin başka yerlerdeki sürümlerle
+# çelişmemesi gerekir.
+_TOOL_VERSION: Final[str] = config.TOOL_VERSION
 
 # Ağırlıklar keyfi değildir: HIGH bir CRITICAL'e göre daha düşük etkiye
 # sahiptir ancak birden fazla HIGH bulgusu birikince risk skoru orantılı
@@ -279,7 +282,57 @@ _EVIDENCE_LABELS: Final[dict[str, str]] = {
     "tekrar_sayisi": "Tekrar Sayısı",
     "ilk_gorulme": "İlk Görülme",
     "son_gorulme": "Son Görülme",
+    # `domains` listesindeki kayıtların içindeki alanlar (bkz.
+    # _format_evidence_record).
+    "domain": "Alan Adı",
+    "length": "Uzunluk",
+    "label": "Etiket",
+    "entropy": "Entropi",
+    "src_ip": "Kaynak IP",
+    "timestamp": "Zaman",
 }
+
+
+def _format_evidence_record(record: dict[str, Any]) -> str:
+    """Kanıt listesindeki tek bir kaydı ("domains" öğesi) okunabilir metne çevirir."""
+    parts = []
+    for key, value in record.items():
+        label = _EVIDENCE_LABELS.get(key, key)
+        rendered = _format_timestamp_value(value) if key == "timestamp" else value
+        parts.append(f"{label}: {rendered}")
+    return " · ".join(parts)
+
+
+def _format_evidence_value(value: Any) -> Any:
+    """Kanıt değerini şablona hazır, insan tarafından okunabilir biçime getirir.
+
+    Neden gerekli: kanıt sözlüğündeki bazı değerler LİSTEDİR (`domains`,
+    `sampled_ports`, `sampled_queries`, `transport_protocols`). Şablon bunları
+    doğrudan `{{ val }}` ile bastığında Jinja, Python'un `repr()` çıktısını
+    yazıyordu; yani adli raporun "Kanıt" sütununda şuna benzer bir blok
+    görünüyordu:
+
+        [{'domain': 'j7r8af...example.com', 'length': 72, 'src_ip':
+        '10.0.0.66', 'timestamp': 1772355840.0}, {'domain': ...
+
+    Süslü parantezler, tırnaklar ve ham epoch sayıları raporu okuyan analist
+    için gürültüdür; üstelik SEC-DGA-001/SEC-LONG-DOMAIN-001 bulgularında bu
+    tek hücre yüzlerce satıra çıkıp tabloyu ezip geçiyordu. Burada listeler
+    satır satır, sözlükler "Etiket: değer" çiftleri olarak yazılır; zaman
+    damgaları da diğer kanıt alanlarıyla aynı biçime çevrilir.
+
+    Satırlar "\\n" ile birleştirilir; şablondaki `.evidence-val` sınıfı
+    `white-space: pre-line` ile bunları görsel satır sonlarına dönüştürür
+    (HTML üretmek yerine düz metin döndürmek autoescape'i bozmamak için
+    bilinçli bir tercihtir).
+    """
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return "-"
+        if all(isinstance(item, dict) for item in value):
+            return "\n".join(_format_evidence_record(item) for item in value)
+        return "\n".join(str(item) for item in value)
+    return value
 
 
 def _format_timestamp_value(value: Any) -> str:
@@ -321,13 +374,18 @@ def _with_hostname(ip_or_endpoint: str | None, hostname_map: dict[str, str]) -> 
 
 
 def _format_bytes(num_bytes: float) -> str:
-    """Byte cinsinden bir değeri KB/MB/GB gibi okunabilir birime çevirir."""
+    """Byte cinsinden bir değeri KB/MB/GB gibi okunabilir birime çevirir.
+
+    Döngü son birimde ("TB") her koşulda döndüğü için fonksiyonun sonuna
+    ayrıca bir dönüş satırı gerekmez; bir zamanlar orada duran satır
+    erişilemez ölü koddu.
+    """
     value = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if value < 1024 or unit == "TB":
             return f"{value:,.2f} {unit}" if unit != "B" else f"{int(value):,} B"
         value /= 1024
-    return f"{value:,.2f} TB"
+    raise AssertionError("ulaşılamaz: döngü 'TB' biriminde her zaman döner")
 
 
 def _group_recurring_findings(findings: Sequence[ThreatFinding]) -> list[ThreatFinding]:
@@ -439,7 +497,8 @@ def _prepare_findings_for_template(
                 evidence[key] = _format_timestamp_value(evidence[key])
 
         evidence_display = [
-            (_EVIDENCE_LABELS.get(k, k), v) for k, v in evidence.items()
+            (_EVIDENCE_LABELS.get(k, k), _format_evidence_value(v))
+            for k, v in evidence.items()
         ]
 
         rows.append(
@@ -581,9 +640,17 @@ class ChartBuilder:
         return self._to_base64(fig), table_data
 
     def port_distribution_chart(
-        self, ports: dict[int, int]
+        self,
+        ports: dict[int, int],
+        title: str | None = None,
+        color: str = "#059669",
     ) -> tuple[str | None, list[TableRow]]:
-        """En sık görülen ilk N port için dikey bar grafiği ve tablo üretir."""
+        """En sık görülen ilk N port için dikey bar grafiği ve tablo üretir.
+
+        `title`/`color` parametreleri, aynı grafiğin TCP ve UDP port dağılımı
+        için ayrı ayrı (ve görsel olarak birbirinden ayırt edilebilir şekilde)
+        üretilebilmesi içindir; verilmezse eski davranış korunur.
+        """
         if not ports:
             return None, []
 
@@ -592,8 +659,8 @@ class ChartBuilder:
         values = [count for _, count in top]
 
         fig, ax = plt.subplots(figsize=self._FIGSIZE, dpi=self._DPI)
-        ax.bar(labels, values, color="#059669")
-        ax.set_title(f"Port Dağılımı (İlk {config.TOP_N_PORTS})")
+        ax.bar(labels, values, color=color)
+        ax.set_title(title or f"Port Dağılımı (İlk {config.TOP_N_PORTS})")
         ax.set_xlabel("Port")
         ax.set_ylabel("Paket Sayısı")
         ax.tick_params(axis="x", rotation=45)
@@ -857,15 +924,16 @@ class Reporter:
                 )
             )
 
-        # 4. Port Dağılımı
+        # 4. TCP Port Dağılımı
         img, table = self._chart_builder.port_distribution_chart(
-            dict(statistics.top_tcp_ports)
+            dict(statistics.top_tcp_ports),
+            title=f"TCP Port Dağılımı (İlk {config.TOP_N_PORTS})",
         )
         if img:
             charts.append(
                 ChartSection(
                     id="port_distribution",
-                    title="Port Dağılımı",
+                    title="TCP Port Dağılımı",
                     description="Trafikte en sık hedef alınan ve kullanılan ilk TCP portlarının paket yoğunluğu.",
                     image=img,
                     table=table,
@@ -873,7 +941,33 @@ class Reporter:
                 )
             )
 
-        # 5. Zaman Çizelgesi
+        # 5. UDP Port Dağılımı
+        # `top_udp_ports` istatistik motorunda hesaplanıyordu ama rapora hiç
+        # girmiyordu: DNS, DHCP, NTP ve günümüzde web trafiğinin büyük
+        # bölümünü taşıyan QUIC/HTTP3 UDP üzerinde koşar, dolayısıyla yalnızca
+        # TCP portlarını göstermek capture'ın önemli bir kısmını görünmez
+        # bırakıyordu.
+        img, table = self._chart_builder.port_distribution_chart(
+            dict(statistics.top_udp_ports),
+            title=f"UDP Port Dağılımı (İlk {config.TOP_N_PORTS})",
+            color="#7c3aed",
+        )
+        if img:
+            charts.append(
+                ChartSection(
+                    id="udp_port_distribution",
+                    title="UDP Port Dağılımı",
+                    description=(
+                        "UDP üzerinde en sık görülen portlar (DNS, DHCP, NTP, QUIC/HTTP3 vb.) "
+                        "ve paket yoğunlukları."
+                    ),
+                    image=img,
+                    table=table,
+                    val_header="Paket Sayısı",
+                )
+            )
+
+        # 6. Zaman Çizelgesi
         img, table = self._chart_builder.timeline_chart(statistics.timeline)
         if img:
             charts.append(
