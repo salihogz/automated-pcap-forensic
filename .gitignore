@@ -42,6 +42,7 @@ reports/
 # ==========================
 .serena/
 graphify-out/
+.claude/
 
 # ==========================
 # Operating System Files
