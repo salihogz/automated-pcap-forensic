@@ -5,6 +5,7 @@ PcapReader akış mimarisi, UTC epoch zaman damgası ve Dataclass veri yapısı 
 """
 
 import logging
+import sys
 from pathlib import Path
 
 # Scapy standart katmanları
@@ -33,6 +34,24 @@ from modules.models import PacketInfo
 logger = logging.getLogger(__name__)
 
 
+def _intern(value: str | None) -> str | None:
+    """Metni intern eder (None ise dokunmaz).
+
+    İki incelik var:
+
+    1. Bu alanların hepsi opsiyoneldir (ör. ICMP paketinde tcp_flags None'dır),
+       bu yüzden None kontrolü gerekli.
+    2. `str(value)` çağrısı gereksiz görünse de zorunludur: Scapy IP adreslerini
+       düz str değil, str'den TÜREYEN `_ScopedIP` olarak döndürür. sys.intern
+       alt sınıfları reddeder ("can't intern _ScopedIP"), dolayısıyla önce düz
+       str'e indirgenmeleri gerekir. Bu indirgeme ayrıca alt sınıf sarmalayıcısının
+       ek yükünü de ortadan kaldırır.
+    """
+    if isinstance(value, str):
+        return sys.intern(str(value))
+    return value
+
+
 class PCAPParser:
     """PCAP/PCAPNG dosyalarını çözerek PacketInfo nesnelerine dönüştüren kütüphane sınıfı."""
 
@@ -50,6 +69,35 @@ class PCAPParser:
                 f"Desteklenmeyen dosya formatı: {self.file_path.suffix}. "
                 f"Desteklenenler: {config.SUPPORTED_EXTENSIONS}"
             )
+
+        self._warn_if_large()
+
+    def _warn_if_large(self) -> None:
+        """Çok büyük capture'larda bellek kullanımı hakkında uyarır.
+
+        Ayrıştırma akış halinde yapılır ama PacketInfo nesnelerinin tamamı
+        bellekte tutulur (tespit kuralları capture'ın bütününe bakar). Analiz
+        REDDEDİLMEZ: meşru büyük capture'ları engellemek adli bir araçta kabul
+        edilemez. Amaç yalnızca, işlem OOM ile aniden kesilirse analistin
+        sebebini bilmesi.
+        """
+        try:
+            size_bytes = self.file_path.stat().st_size
+        except OSError:  # pragma: no cover - stat burada pratikte başarısız olmaz
+            return
+
+        if size_bytes < config.LARGE_CAPTURE_WARNING_BYTES:
+            return
+
+        size_mb = size_bytes / (1024 * 1024)
+        worst_case_mb = size_mb * config.LARGE_CAPTURE_WORST_CASE_MEMORY_FACTOR
+        logger.warning(
+            "Büyük capture (%.0f MB). Paketlerin tamamı bellekte tutulur; "
+            "en kötü durumda ~%.0f MB RAM gerekebilir. Bellek yetersizse "
+            "capture'ı editcap gibi bir araçla parçalara bölüp ayrı ayrı analiz edin.",
+            size_mb,
+            worst_case_mb,
+        )
 
     @staticmethod
     def _extract_network_layer(packet: Packet) -> tuple[str | None, str | None, str, bool]:
@@ -251,16 +299,25 @@ class PCAPParser:
         return PacketInfo(
             id=index,
             epoch_time=epoch_time,
-            src_ip=src_ip,
-            dst_ip=dst_ip,
+            # Bellek: bu alanlar milyonlarca pakette tekrar eden, küçük bir
+            # değer kümesinden gelir (bir capture'da tipik olarak birkaç yüz
+            # farklı IP, tek haneli sayıda protokol ve bayrak kombinasyonu).
+            # Scapy her paket için AYRI bir str nesnesi ürettiğinden, intern
+            # edilmezlerse aynı metin milyonlarca kez kopyalanır: 300 bin
+            # paketlik bir ölçümde tutulan 121 MB'ın 76 MB'ı bu kopyalardı,
+            # oysa benzersiz değerlerin toplamı 3 MB idi. _intern paylaşılan
+            # tek bir nesneye işaret ettirir; PacketInfo frozen olduğu için
+            # paylaşım güvenlidir.
+            src_ip=_intern(src_ip),
+            dst_ip=_intern(dst_ip),
             is_ipv6=is_ipv6,
-            network_protocol=network_protocol,
-            transport_protocol=transport_protocol,
-            application_protocol=application_protocol,
+            network_protocol=_intern(network_protocol),
+            transport_protocol=_intern(transport_protocol),
+            application_protocol=_intern(application_protocol),
             length=len(packet),
             src_port=src_port,
             dst_port=dst_port,
-            tcp_flags=tcp_flags,
+            tcp_flags=_intern(tcp_flags),
             dns_answers=dns_answers,
             dns_query_name=dns_query_name,
             dns_query_type=dns_query_type,

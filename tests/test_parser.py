@@ -10,6 +10,7 @@ tests/test_parser.py - PCAPParser Unit ve Entegrasyon Testleri
    .pcap dosyası yazıp PCAPParser.parse() uçtan uca çalıştırılır
    (validate_file + PcapReader streaming + hata toleransı dahil).
 """
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -513,3 +514,89 @@ def test_parse_raises_runtime_error_when_stream_is_corrupt(tmp_path):
 
     with pytest.raises(RuntimeError, match="PCAP okuma hatası"):
         parser.parse()
+
+
+# ---------------------------------------------------------------------------
+# Bellek: tekrar eden string alanlarının paylaşılması
+#
+# Bir capture'da src_ip/dst_ip/protokol/bayrak alanları küçük bir değer
+# kümesinden gelir ama milyonlarca pakette tekrarlanır. Scapy her paket için
+# ayrı str nesnesi ürettiğinden, intern edilmezlerse aynı metin milyonlarca
+# kez kopyalanır. Ölçüm: 300 bin pakette tutulan bellek 428 -> 291 bayt/paket
+# (%32 azalma). Bu testler optimizasyonun sessizce geri alınmasını engeller.
+# ---------------------------------------------------------------------------
+
+def test_repeated_string_fields_share_one_object(tmp_path):
+    """Aynı değere sahip alanlar TEK bir nesneyi paylaşmalı (kopyalanmamalı)."""
+    pcap_file = tmp_path / "shared.pcap"
+    packets = [make_tcp_packet(src="10.0.0.1", dst="10.0.0.2", flags="PA") for _ in range(50)]
+    wrpcap(str(pcap_file), packets)
+
+    parsed = PCAPParser(pcap_file).parse()
+
+    assert len(parsed) == 50
+    for field in ("src_ip", "dst_ip", "network_protocol", "transport_protocol", "tcp_flags"):
+        object_ids = {id(getattr(p, field)) for p in parsed}
+        assert len(object_ids) == 1, (
+            f"{field}: 50 pakette {len(object_ids)} ayrı nesne var; "
+            "intern edilmemiş, bellek boşa harcanıyor"
+        )
+
+
+def test_ip_fields_are_plain_str_not_scapy_subclass(tmp_path):
+    """IP alanları düz str olmalı, Scapy'nin _ScopedIP alt sınıfı değil.
+
+    Scapy IP adreslerini str'den TÜREYEN bir tiple döndürüyor. sys.intern
+    alt sınıfları reddettiği için ('can't intern _ScopedIP') düz str'e
+    indirgenmeleri gerekiyor; bu indirgeme atlanırsa ayrıştırma TypeError
+    ile çöker.
+    """
+    pcap_file = tmp_path / "plain.pcap"
+    wrpcap(str(pcap_file), [make_tcp_packet(), make_ipv6_packet()])
+
+    parsed = PCAPParser(pcap_file).parse()
+
+    for p in parsed:
+        assert type(p.src_ip) is str, f"src_ip düz str değil: {type(p.src_ip)}"
+        assert type(p.dst_ip) is str, f"dst_ip düz str değil: {type(p.dst_ip)}"
+
+
+def test_interning_preserves_field_values(tmp_path):
+    """Bellek optimizasyonu değerleri DEĞİŞTİRMEMELİ (ör. IPv6 kısaltmaları)."""
+    pcap_file = tmp_path / "values.pcap"
+    wrpcap(str(pcap_file), [make_tcp_packet(src="192.168.1.50", dst="8.8.8.8", flags="S")])
+
+    parsed = PCAPParser(pcap_file).parse()
+
+    assert parsed[0].src_ip == "192.168.1.50"
+    assert parsed[0].dst_ip == "8.8.8.8"
+    assert parsed[0].transport_protocol == "TCP"
+
+
+def test_large_capture_logs_warning_but_still_parses(tmp_path, monkeypatch, caplog):
+    """Eşik aşıldığında uyarı loglanmalı ama analiz REDDEDİLMEMELİ.
+
+    Adli bir araçta büyük bir delil dosyasını işlemeyi reddetmek kabul edilemez;
+    amaç yalnızca, bellek yetmezse analistin sebebini bilmesi.
+    """
+    pcap_file = tmp_path / "big.pcap"
+    wrpcap(str(pcap_file), [make_tcp_packet() for _ in range(5)])
+    # Eşiği dosyanın altına çekerek "büyük dosya" durumunu taklit et.
+    monkeypatch.setattr(config, "LARGE_CAPTURE_WARNING_BYTES", 1)
+
+    with caplog.at_level(logging.WARNING):
+        parsed = PCAPParser(pcap_file).parse()
+
+    assert len(parsed) == 5, "uyarıya rağmen ayrıştırma tamamlanmalı"
+    assert "Büyük capture" in caplog.text
+    assert "RAM" in caplog.text
+
+
+def test_normal_capture_does_not_log_size_warning(tmp_path, caplog):
+    pcap_file = tmp_path / "small.pcap"
+    wrpcap(str(pcap_file), [make_tcp_packet()])
+
+    with caplog.at_level(logging.WARNING):
+        PCAPParser(pcap_file).parse()
+
+    assert "Büyük capture" not in caplog.text

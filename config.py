@@ -167,6 +167,22 @@ for directory in (SAMPLES_DIR, REPORTS_DIR, TEMPLATES_DIR, STATIC_DIR, LOGS_DIR)
 
 SUPPORTED_EXTENSIONS = (".pcap", ".pcapng")
 
+# --------------------------------------------------------------------
+# Büyük capture uyarı eşiği
+# --------------------------------------------------------------------
+# Ayrıştırma akış halinde (PcapReader) yapılır, ancak üretilen PacketInfo
+# nesnelerinin TAMAMI bellekte tutulur; tespit kuralları capture'ın bütününe
+# bakabilmek zorunda olduğu için. Ölçüm (300 bin paket, gerçekçi IP
+# çeşitliliği): paket başına ~291 bayt, tespit sırasında zirve ~480 bayt.
+#
+# Bellek paket SAYISIYLA orantılıdır, dosya boyutuyla değil: küçük paketlerden
+# (64 bayt) oluşan bir dosya, MB başına çok daha fazla paket içerir. En kötü
+# durumda dosya boyutunun ~5 katı bellek gerekebilir. Bu yüzden eşik aşıldığında
+# analiz REDDEDİLMEZ -- meşru büyük capture'ları engellemek doğru olmaz -- yalnızca
+# uyarı loglanır ki OOM ile aniden kesilme sürpriz olmasın.
+LARGE_CAPTURE_WARNING_BYTES = 500 * 1024 * 1024  # 500 MB
+LARGE_CAPTURE_WORST_CASE_MEMORY_FACTOR = 5
+
 PROTOCOL_MAP = {
     1: "ICMP",
     2: "IGMP",
