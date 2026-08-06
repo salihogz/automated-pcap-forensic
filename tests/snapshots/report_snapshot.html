@@ -323,7 +323,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 <!-- 2. Trafik Grafikleri ve Analist Tabloları -->
 <section id="protocol_distribution">
 <h2>2. Protokol Dağılımı</h2>
-<p class="chart-desc">Yakalanan paketlerin uygulama/taşıma katmanı protokollerine göre yüzdesel dağılımı.</p>
+<p class="chart-desc">Yakalanan her paket, tespit edilebilen en üst katmanın protokolüyle tam olarak bir kez sayılır (uygulama → taşıma → ağ katmanı). Tek bir protokolün baskın olduğu capture&#39;larda küçük protokollerin de görünebilmesi için ölçek logaritmik olabilir; bar uçlarındaki sayılar her zaman gerçek paket sayısıdır.</p>
 <div class="chart-container">
 <div class="chart-box">
 <img src="data:image/png;base64,SNAPSHOT_BASE64_PLACEHOLDER" alt="Protokol Dağılımı">
@@ -340,15 +340,15 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 <tbody>
 <tr>
 <td>TCP</td>
-<td><strong>10,000</strong></td>
+<td><strong>10,000 (66.7%)</strong></td>
 </tr>
 <tr>
 <td>UDP</td>
-<td><strong>4,000</strong></td>
+<td><strong>4,000 (26.7%)</strong></td>
 </tr>
 <tr>
 <td>ICMP</td>
-<td><strong>1,000</strong></td>
+<td><strong>1,000 (6.7%)</strong></td>
 </tr>
 </tbody>
 </table>

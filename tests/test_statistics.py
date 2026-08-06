@@ -103,3 +103,52 @@ def test_invalid_timestamp_excluded_from_time_calculations():
     assert stats.first_packet_time == 50.0     # ama zaman hesabına dahil değil
     assert stats.last_packet_time == 52.0
     assert stats.capture_duration == 2.0
+
+
+def _layered_packet(packet_id, network, transport, application):
+    """Katman protokolleri serbestçe verilebilen paket üreticisi."""
+    return PacketInfo(
+        id=packet_id,
+        epoch_time=1000.0 + packet_id,
+        src_ip="10.0.0.1",
+        dst_ip="10.0.0.2",
+        is_ipv6=False,
+        network_protocol=network,
+        transport_protocol=transport,
+        application_protocol=application,
+        length=100,
+        src_port=None,
+        dst_port=None,
+        tcp_flags=None,
+    )
+
+
+def test_protocol_distribution_falls_back_to_network_layer():
+    """Taşıma katmanı olmayan paketler ağ katmanı adıyla sayılmalı.
+
+    Regresyon: birleşik dağılım yalnızca
+    `application_protocol or transport_protocol or "UNKNOWN"` zincirini
+    kullanıyordu. Taşıma katmanı bulunmayan paketler bu yüzden "UNKNOWN"
+    kovasına düşüyordu; en görünür kurbanı ARP'tı. Parser ARP'ı ağ katmanında
+    doğru tespit ettiği hâlde, rapordaki protokol grafiğinde ARP diye bir şey
+    görünmüyor, gerçek bir LAN capture'ının en yaygın protokollerinden biri
+    "UNKNOWN" olarak kayboluyordu. Aynısı tanınmayan taşıma protokolleri
+    (GRE/ESP/AH) için de geçerliydi.
+    """
+    packets = [
+        _layered_packet(1, "ARP", None, None),
+        _layered_packet(2, "ARP", None, None),
+        _layered_packet(3, "IPv4", "TCP", "TLS"),
+        _layered_packet(4, "IPv4", "ICMP", None),
+        _layered_packet(5, "IPv4", None, None),  # GRE/ESP gibi tanınmayan taşıma
+    ]
+
+    dist = build_general_statistics(packets).protocol_distribution
+
+    assert dist["ARP"] == 2
+    assert dist["TLS"] == 1
+    assert dist["ICMP"] == 1
+    assert dist["IPv4"] == 1
+    assert "UNKNOWN" not in dist
+    # Birleşik dağılım her paketi TAM OLARAK bir kez saymalı.
+    assert sum(dist.values()) == len(packets)

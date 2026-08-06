@@ -260,7 +260,7 @@ Measured on a 300k-packet capture with realistic IP diversity: **291 bytes per p
 | 1M packets | ~290 MB |
 | 10M packets | ~2.9 GB |
 
-Memory scales with *packet count*, not file size — a capture of small packets holds far more packets per MB. Captures above 500 MB log a warning with an estimate; the analysis is **not** refused, since refusing to process a large piece of evidence would be unacceptable in a forensic tool.
+Memory scales with *packet count*, not file size — a capture of small packets holds far more packets per MB. The spread is wide enough that a single number would mislead: a 1.3 GB capture of 5.7 KB packets measured **179 MB** peak RSS (0.14× the file size), while the same 1.3 GB made of minimum-size 64-byte packets would need roughly 5× the file size. Captures above 500 MB therefore log a warning giving that *range*, not one figure. The analysis is **not** refused, since refusing to process a large piece of evidence would be unacceptable in a forensic tool.
 
 The planned fix is chunked processing: every detection rule has a bounded time window (the largest is exfiltration's 300s), so the capture can be split into time slices with an overlap of at least that window, with findings deduplicated across the overlap. This is deferred rather than rushed — getting the overlap or deduplication wrong would produce *silent false negatives*, which is the worst possible failure mode for a forensic tool.
 

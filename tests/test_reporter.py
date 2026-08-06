@@ -851,3 +851,58 @@ def test_format_evidence_value_shapes():
 
     rendered = r._format_evidence_value([{"domain": "a.com", "timestamp": 1609459200.0}])
     assert rendered == "Alan Adı: a.com · Zaman: 2021-01-01 00:00:00 UTC"
+
+
+class TestProtocolDistributionChart:
+    """Protokol dağılımı grafiğinin uzun kuyruğu görünür kılması."""
+
+    def test_uses_log_scale_when_one_protocol_dominates(self):
+        """Ezici üstünlük durumunda x ekseni logaritmik olmalı.
+
+        Regresyon: grafik pasta idi. Ölçülen gerçek bir capture'da 233.136 TLS
+        paketine karşılık 26 NTP paketi vardı (9000:1); pastada bu, %98,4'lük
+        tek bir daire ve gözle görülemeyen dilimler demekti. Adli analizde
+        ilginç olan genellikle ezici çoğunluk değil, tam da o uzun kuyruktur.
+        """
+        builder = r.ChartBuilder()
+        img, table = builder.protocol_distribution_chart(
+            {"TLS": 233136, "QUIC": 3353, "DNS": 328, "NTP": 26}
+        )
+
+        assert isinstance(img, str) and img
+        # En küçük protokol de tabloda gerçek sayısıyla durmalı.
+        assert [row.label for row in table] == ["TLS", "QUIC", "DNS", "NTP"]
+        assert table[0].value == "233,136 (98.4%)"
+        assert table[-1].value.startswith("26 (")
+
+        ratio = 233136 / 26
+        assert ratio >= builder._LOG_SCALE_RATIO_THRESHOLD
+
+    def test_uses_linear_scale_when_distribution_is_balanced(self):
+        """Dengeli dağılımda logaritmik ölçek yanıltıcı olur, doğrusal kalmalı."""
+        builder = r.ChartBuilder()
+        distribution = {"TCP": 1000, "UDP": 800, "ICMP": 300, "ARP": 60}
+        img, table = builder.protocol_distribution_chart(distribution)
+
+        assert isinstance(img, str) and img
+        assert len(table) == 4
+        assert max(distribution.values()) / min(distribution.values()) < (
+            builder._LOG_SCALE_RATIO_THRESHOLD
+        )
+
+    def test_table_rows_carry_count_and_percentage(self):
+        """Tablo hem ham sayıyı hem yüzdeyi taşımalı.
+
+        Yüzdeler eskiden yalnızca pasta legend'indeydi; pasta kaldırıldığı için
+        bu bilginin tabloya taşınmış olması gerekir.
+        """
+        _img, table = r.ChartBuilder().protocol_distribution_chart({"TCP": 75, "UDP": 25})
+        assert [(row.label, row.value) for row in table] == [
+            ("TCP", "75 (75.0%)"),
+            ("UDP", "25 (25.0%)"),
+        ]
+
+    def test_empty_distribution_returns_no_chart(self):
+        img, table = r.ChartBuilder().protocol_distribution_chart({})
+        assert img is None
+        assert table == []

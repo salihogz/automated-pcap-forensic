@@ -88,7 +88,21 @@ def build_general_statistics(packets: Iterable[PacketInfo]) -> GeneralStatistics
                 last_time = packet.epoch_time
 
         # --- Dağılımlar ---
-        protocol_counter[packet.application_protocol or packet.transport_protocol or "UNKNOWN"] += 1
+        # Birleşik dağılım, her paketi TAM OLARAK BİR KEZ sayar (toplamı
+        # total_packets'e eşittir) ve paketi bilinen EN ÜST katmanın adıyla
+        # etiketler. Zincire `network_protocol` de dahildir: o olmadan, taşıma
+        # katmanı bulunmayan paketler "UNKNOWN" kovasına düşüyordu. Bunun en
+        # görünür kurbanı ARP'tı -- parser ARP'ı ağ katmanında DOĞRU tespit
+        # ettiği halde, birleşik dağılımda (yani rapordaki protokol
+        # grafiğinde) "UNKNOWN" olarak görünüyordu. ARP gerçek bir LAN
+        # capture'ında en yaygın protokollerden biridir; aynı şey tanınmayan
+        # taşıma protokolleri (GRE, ESP, AH ...) için de geçerliydi.
+        protocol_counter[
+            packet.application_protocol
+            or packet.transport_protocol
+            or packet.network_protocol
+            or "UNKNOWN"
+        ] += 1
         network_counter[packet.network_protocol or "UNKNOWN"] += 1
         transport_counter[packet.transport_protocol or "UNKNOWN"] += 1
         application_counter[packet.application_protocol or "UNKNOWN"] += 1

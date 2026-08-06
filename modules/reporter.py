@@ -532,59 +532,76 @@ class ChartBuilder:
     _FIGSIZE: Final[tuple[float, float]] = (8.0, 4.2)
     _DPI: Final[int] = 110
 
-    # Bu eşiğin altındaki dilimler için pasta üzerine yüzde metni yazılmaz.
-    # Eski davranışta (labels=slice üzerinde + autopct her zaman açık) küçük
-    # dilimler (örn. DNS %0.1, NTP %0.01) hepsi dilimin en dar noktasına
-    # sıkıştığından etiketler birbirinin üzerine biniyordu (bkz. rapor
-    # ekran görüntüsü: "DNS"/"NTP"/"0.0%" iç içe geçmiş). Küçük dilimlerin
-    # tüm ayrıntısı zaten sağdaki legend'de ve analist tablosunda mevcut.
-    _PIE_LABEL_MIN_PCT: Final[float] = 3.0
+    # Bu orandan (en büyük / en küçük protokol) itibaren x ekseni logaritmik
+    # ölçeğe geçer. Bkz. protocol_distribution_chart.
+    _LOG_SCALE_RATIO_THRESHOLD: Final[float] = 100.0
 
     def protocol_distribution_chart(
         self, distribution: dict[str, int]
     ) -> tuple[str | None, list[TableRow]]:
-        """Protokol dağılımı için pasta grafiği ve analist veri tablosu üretir.
+        """Protokol dağılımı için yatay bar grafiği ve analist veri tablosu üretir.
 
-        Dilim etiketleri artık pastanın üzerine değil, sağdaki bir legend'e
-        yazılır: paket sayısı çok küçük protokoller (DNS, NTP vb.) büyük bir
-        TLS/TCP dilimiyle aynı grafik üzerinde gösterildiğinde, dilim üstü
-        metinler dilim ne kadar küçülürse küçülsün aynı dar alana sıkışıp
-        birbirine karışıyordu. Legend, dilim boyutundan bağımsız sabit bir
-        alanda okunaklı kalır.
+        NEDEN PASTA DEĞİL: Gerçek trafikte protokol dağılımı neredeyse her
+        zaman tek bir protokolün ezici üstünlüğüyle gelir. Ölçülen bir
+        capture'da 233.136 TLS paketine karşılık 328 DNS ve 26 NTP paketi
+        vardı; yani oran 9000:1. Pasta grafiğinde bu, %98,4'lük tek bir
+        daire ve gözle görülemeyen -bir çizgiden ince- dilimler demekti;
+        legend "NTP (%0.0)" yazıyordu. Oysa adli analizde ilginç olan
+        genellikle ezici çoğunluk DEĞİL, tam da o uzun kuyruktur: 26 paketlik
+        beklenmedik bir protokol, 233 bin paketlik sıradan HTTPS trafiğinden
+        çok daha anlamlıdır.
+
+        Yatay bar + gerektiğinde LOGARİTMİK x ekseni bu kuyruğu görünür kılar.
+        Ölçek koşulludur: en büyük/en küçük oranı
+        `_LOG_SCALE_RATIO_THRESHOLD`'un altındaysa doğrusal ölçek daha dürüst
+        ve okunaklıdır. Hangi ölçeğin kullanıldığı eksen etiketine yazılır ki
+        logaritmik bir grafik yanlışlıkla doğrusal okunmasın; ayrıca her
+        barın ucuna GERÇEK sayı ve yüzde yazılır, dolayısıyla görsel oran
+        yanıltsa bile veri tam olarak okunabilir.
         """
         if not distribution:
             return None, []
 
         items = sorted(distribution.items(), key=lambda kv: kv[1], reverse=True)
-        _labels, values = zip(*items, strict=True)
-        total = sum(values)
+        total = sum(value for _, value in items)
 
-        def _autopct(pct: float) -> str:
-            return f"{pct:.1f}%" if pct >= self._PIE_LABEL_MIN_PCT else ""
+        # barh en büyüğü en üstte göstersin diye ters çeviriyoruz.
+        labels = [label for label, _ in reversed(items)]
+        values = [value for _, value in reversed(items)]
+
+        smallest = min(v for v in values if v > 0) if any(values) else 1
+        use_log = max(values) / smallest >= self._LOG_SCALE_RATIO_THRESHOLD
 
         fig, ax = plt.subplots(figsize=self._FIGSIZE, dpi=self._DPI)
-        wedges, _texts, _autotexts = ax.pie(
-            values,
-            labels=None,
-            autopct=_autopct,
-            pctdistance=0.75,
-            startangle=90,
-        )
+        bars = ax.barh(labels, values, color="#2563eb")
         ax.set_title("Protokol Dağılımı")
 
-        legend_labels = [f"{label} ({value / total:.1%})" for label, value in items]
-        ax.legend(
-            wedges,
-            legend_labels,
-            title="Protokoller",
-            loc="center left",
-            bbox_to_anchor=(1.02, 0.5),
-            fontsize=8,
-            frameon=False,
-        )
+        if use_log:
+            ax.set_xscale("log")
+            # Log ekseninde bar tabanı 0 olamaz; sol sınır 1 paketin biraz
+            # altına çekilir ki en küçük protokolün barı da görünür kalsın.
+            ax.set_xlim(left=0.7, right=max(values) * 3)
+            ax.set_xlabel("Paket Sayısı (logaritmik ölçek)")
+        else:
+            ax.set_xlim(right=max(values) * 1.25)
+            ax.set_xlabel("Paket Sayısı")
+
+        for bar, value in zip(bars, values, strict=True):
+            ax.annotate(
+                f"{value:,} ({value / total:.1%})",
+                xy=(bar.get_width(), bar.get_y() + bar.get_height() / 2),
+                xytext=(4, 0),
+                textcoords="offset points",
+                va="center",
+                fontsize=8,
+            )
+
         fig.tight_layout()
 
-        table_data = [TableRow(label=k, value=f"{v:,}") for k, v in items]
+        table_data = [
+            TableRow(label=label, value=f"{value:,} ({value / total:.1%})")
+            for label, value in items
+        ]
         return self._to_base64(fig), table_data
 
     # Grafik çubuğu etiketlerinde hostname bu uzunluktan sonra kesilir;
@@ -878,7 +895,13 @@ class Reporter:
                 ChartSection(
                     id="protocol_distribution",
                     title="Protokol Dağılımı",
-                    description="Yakalanan paketlerin uygulama/taşıma katmanı protokollerine göre yüzdesel dağılımı.",
+                    description=(
+                        "Yakalanan her paket, tespit edilebilen en üst katmanın protokolüyle "
+                        "tam olarak bir kez sayılır (uygulama → taşıma → ağ katmanı). Tek bir "
+                        "protokolün baskın olduğu capture'larda küçük protokollerin de "
+                        "görünebilmesi için ölçek logaritmik olabilir; bar uçlarındaki "
+                        "sayılar her zaman gerçek paket sayısıdır."
+                    ),
                     image=img,
                     table=table,
                     val_header="Paket Sayısı",
