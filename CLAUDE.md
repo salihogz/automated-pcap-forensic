@@ -27,7 +27,7 @@ ruff check .
 ruff format .
 ```
 
-There is no `pyproject.toml`/`pytest.ini`/ruff config file — both tools run with their default settings. No Docker support yet (listed as planned in README).
+`pyproject.toml` configures ruff, pytest and coverage (it is **not** a packaging manifest — dependencies live in `requirements.txt` / `requirements-dev.txt`). Two ruff decisions there are deliberate and should not be "fixed": `RUF001/002/003` (ambiguous-unicode) are ignored because the Turkish docstrings/comments trigger 1600+ false positives, and `UP042` is ignored because switching `class X(str, Enum)` to `StrEnum` would change what `str(member)` returns — the report template relies on the current behaviour via `finding.severity|string`. `ruff format` has **not** been applied to the codebase, so CI runs `ruff check` only. No Docker support yet (listed as planned in README).
 
 ## Environment configuration
 

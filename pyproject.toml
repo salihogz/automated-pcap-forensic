@@ -1,0 +1,86 @@
+[project]
+name = "automated-pcap-forensic"
+version = "1.2.0"
+description = "Automated PCAP/PCAPNG forensic analysis tool for DFIR and network security"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "MIT" }
+
+# Bağımlılıklar requirements.txt / requirements-dev.txt dosyalarında tutuluyor.
+# Bu dosya paketleme için değil, yalnızca araç yapılandırması için kullanılıyor.
+
+# ----------------------------------------------------------------------
+# Ruff
+# ----------------------------------------------------------------------
+[tool.ruff]
+line-length = 120          # 88 çok dar kalıyor: tespit kurallarının koşulları ve
+                           # log çağrıları okunabilirliğini yitirmeden sığmıyordu.
+target-version = "py314"
+exclude = ["venv", ".venv", "htmlcov", "reports", "samples"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort (import sıralaması)
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # flake8-bugbear
+    "SIM",      # flake8-simplify
+    "C4",       # flake8-comprehensions
+    "PTH",      # pathlib kullanımı (os.path yerine)
+    "RET",      # gereksiz return kalıpları
+    "ARG",      # kullanılmayan fonksiyon argümanları
+    "DTZ",      # timezone-naive datetime kullanımı
+    "LOG",      # logging çağrı hataları
+    "RUF",      # ruff'a özgü kurallar
+]
+ignore = [
+    # Bu kurallar Latin dışı karakterleri "belirsiz" sayıyor. Projenin
+    # docstring ve yorumları Türkçe olduğu için ı/ş/ğ/İ içeren her satırda
+    # tetikleniyorlar (1600'den fazla yanlış pozitif). Türkçe metin bir hata
+    # değil, bilinçli bir konvansiyon (bkz. CLAUDE.md).
+    "RUF001",  # string içinde belirsiz unicode karakter
+    "RUF002",  # docstring içinde belirsiz unicode karakter
+    "RUF003",  # yorum içinde belirsiz unicode karakter
+
+    # `class X(str, Enum)` yerine `StrEnum` öneriyor. İkisi aynı değil:
+    # StrEnum'da str(X.UYE) üyenin DEĞERİNİ, (str, Enum)'da ise "X.UYE"
+    # metnini verir. Rapor şablonu `finding.severity|string` ile bu davranışa
+    # dayanıyor, dolayısıyla geçiş rapor çıktısını sessizce bozardı.
+    "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# load_dotenv() import'lardan ÖNCE çağrılmak zorunda: config modülü import
+# edildiği anda ortam değişkenlerinin okunmuş olması gerekiyor.
+"main.py" = ["E402"]
+
+# ----------------------------------------------------------------------
+# Pytest
+# ----------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--strict-markers"
+filterwarnings = [
+    # Scapy'nin kendi DNS alan adı uyarısı; bizim kodumuzla ilgisi yok ve
+    # test çıktısını gürültüye boğuyor.
+    "ignore:The DNS fields.*:DeprecationWarning",
+]
+
+# ----------------------------------------------------------------------
+# Coverage
+# ----------------------------------------------------------------------
+[tool.coverage.run]
+source = ["modules", "main", "config"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    'if __name__ == "__main__":',
+]

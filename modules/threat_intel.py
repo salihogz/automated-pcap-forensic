@@ -26,7 +26,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -115,7 +115,7 @@ class NormalizedIOCResult:
 
 def _utc_now() -> datetime:
     """Mevcut UTC datetime nesnesini döndürür."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _safe_int(value: Any, default: int | None = None) -> int | None:
@@ -134,7 +134,7 @@ def _parse_unix_timestamp(value: Any) -> datetime | None:
     if value is None:
         return None
     try:
-        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        return datetime.fromtimestamp(float(value), tz=UTC)
     except (TypeError, ValueError, OSError):
         logger.warning("Unix timestamp ayrıştırılamadı: %r", value)
         return None

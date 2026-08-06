@@ -46,7 +46,7 @@ def test_top_bandwidth_hosts_counts_bytes_not_packets():
         _make_packet(2.0, "10.0.0.9", "10.0.0.9", 1),
     ]
     stats = build_general_statistics(packets)
-    
+
     # Host bandwidth hem gelen hem giden trafiği (src + dst) toplar:
     # 10.0.0.1 -> 1000 byte (src)
     # 10.0.0.2 -> 1000 byte (dst)
@@ -72,7 +72,7 @@ def test_udp_ports_counts_both_src_and_dst():
 
 def test_timeline_uses_epoch_based_buckets():
     bucket_size = getattr(config, "TIMELINE_BUCKET_SECONDS", 1.0)
-    
+
     t0 = 100.0
     t1 = t0 + (bucket_size * 0.4)  # t0 ile aynı bucket
     t2 = t0 + (bucket_size * 1.2)  # bir sonraki bucket

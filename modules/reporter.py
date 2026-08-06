@@ -42,7 +42,7 @@ import sys
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -292,10 +292,10 @@ def _format_timestamp_value(value: Any) -> str:
     if value is None:
         return "-"
     if isinstance(value, datetime):
-        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        dt = value if value.tzinfo else value.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     try:
-        return datetime.fromtimestamp(float(value), tz=timezone.utc).strftime(
+        return datetime.fromtimestamp(float(value), tz=UTC).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         )
     except (TypeError, ValueError, OSError):
@@ -613,7 +613,7 @@ class ChartBuilder:
 
         items = sorted(timeline.items())
         formatted_labels = [
-            datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S")
+            datetime.fromtimestamp(ts, tz=UTC).strftime("%H:%M:%S")
             for ts, _ in items
         ]
         values = [count for _, count in items]
@@ -880,7 +880,10 @@ class Reporter:
                 ChartSection(
                     id="timeline",
                     title="Zaman Çizelgesi (Paket Trafiği)",
-                    description="Analiz edilen zaman aralığı boyunca ağ trafiğinde meydana gelen anlık yoğunlaşma ve dalgalanmalar.",
+                    description=(
+                        "Analiz edilen zaman aralığı boyunca ağ trafiğinde meydana gelen "
+                        "anlık yoğunlaşma ve dalgalanmalar."
+                    ),
                     image=img,
                     table=table,
                     val_header="Paket Sayısı",

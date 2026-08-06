@@ -18,7 +18,7 @@ Kapsam:
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from datetime import timezone
+from datetime import UTC
 from json import JSONDecodeError
 from unittest.mock import MagicMock
 
@@ -98,7 +98,7 @@ def test_safe_int_valid_and_invalid():
 def test_parse_unix_timestamp_valid_and_invalid():
     dt = ti._parse_unix_timestamp(1700000000)
     assert dt is not None
-    assert dt.tzinfo == timezone.utc
+    assert dt.tzinfo == UTC
 
     assert ti._parse_unix_timestamp(None) is None
     assert ti._parse_unix_timestamp("not-a-timestamp") is None

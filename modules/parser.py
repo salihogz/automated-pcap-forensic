@@ -278,7 +278,7 @@ class PCAPParser:
                     packet_count += 1
                     try:
                         parsed_packets.append(self._parse_single_packet(packet, packet_count))
-                    except Exception as pkt_err:  # noqa: BLE001
+                    except Exception as pkt_err:
                         logger.warning("Paket #%d işlenirken hata oluştu, atlanıyor: %s", packet_count, pkt_err)
         except (Scapy_Exception, OSError, ValueError, TypeError) as stream_err:
             logger.error("PCAP okuma akışı kritik hatayla kesildi: %s", stream_err)

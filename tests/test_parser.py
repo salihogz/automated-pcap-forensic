@@ -243,7 +243,7 @@ def test_parse_reads_multiple_packets_from_real_pcap(tmp_path):
 
     assert len(result) == 3
     assert [p.id for p in result] == [1, 2, 3]
-    
+
     # Protokol ve uygulama eşleşmeleri
     assert result[0].transport_protocol == "TCP"
     assert result[1].application_protocol == "DNS"
@@ -313,7 +313,7 @@ def test_parse_continues_after_single_packet_failure(tmp_path):
     wrpcap(str(pcap_file), packets)
 
     parser = PCAPParser(pcap_file)
-    
+
     # Orijinal metot referansı patch öncesinde saklanıyor
     original_parse = PCAPParser._parse_single_packet
     call_count = 0

@@ -13,7 +13,7 @@ Addresses deep production contract details:
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,7 +31,7 @@ from modules.models import GeneralStatistics, ThreatFinding, ThreatSeverity
 from modules.threat_intel import NormalizedIOCResult
 
 # Fixed reference timestamp for deterministic tests
-FIXED_TEST_NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+FIXED_TEST_NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 
 # ---------------------------------------------------------------------------
 # 1. Structural & Dataclass Contract Assertions
@@ -118,7 +118,7 @@ class TestReporterIsolatedUnitMethods:
 
         # Call production sorting logic via Reporter class
         sorted_findings = r.Reporter._sort_findings_by_severity(findings)
-        
+
         expected_order = [
             ThreatSeverity.CRITICAL,
             ThreatSeverity.HIGH,
@@ -131,7 +131,8 @@ class TestReporterIsolatedUnitMethods:
         assert actual_order == expected_order
 
     def test_write_method_success_and_error_handling(self, tmp_path: Path):
-        """Validates _write successfully writes files, auto-creates parent directories, and wraps write permission errors."""
+        """Validates _write writes files, auto-creates parent directories,
+        and wraps write permission errors."""
         target_path = tmp_path / "nested" / "reports" / "test_write.html"
         content = "<html><body>Write Test</body></html>"
 
@@ -169,9 +170,13 @@ class TestReporterIsolatedUnitMethods:
                 charts=[],
             )
 
-        assert "template" in str(exc_info.value).lower() or isinstance(exc_info.value.__cause__, (TemplateNotFound, TemplateError))
+        assert "template" in str(exc_info.value).lower() or isinstance(
+            exc_info.value.__cause__, (TemplateNotFound, TemplateError)
+        )
 
-    def test_generate_public_method_invalid_template_dir(self, tmp_path: Path, populated_statistics: GeneralStatistics):
+    def test_generate_public_method_invalid_template_dir(
+        self, tmp_path: Path, populated_statistics: GeneralStatistics
+    ):
         """Validates public generate() API method raises ReportGenerationError when template_dir is invalid."""
         invalid_reporter = r.Reporter(template_dir=tmp_path)
         pcap_file = tmp_path / "test.pcap"
@@ -186,7 +191,9 @@ class TestReporterIsolatedUnitMethods:
                 analysis_duration=1.0,
             )
 
-        assert "template" in str(exc_info.value).lower() or isinstance(exc_info.value.__cause__, (TemplateNotFound, TemplateError))
+        assert "template" in str(exc_info.value).lower() or isinstance(
+            exc_info.value.__cause__, (TemplateNotFound, TemplateError)
+        )
 
     def test_validate_inputs_validation_rules_and_error_messages(self, tmp_path: Path):
         """Tests input validation logic in Reporter verifying both exception type and message contents."""
@@ -208,7 +215,8 @@ class TestReporterIsolatedUnitMethods:
         # 3. Output path is a directory
         with pytest.raises(r.ReportGenerationError) as exc3:
             reporter._validate_inputs(valid_stats, valid_meta, tmp_path)
-        assert "dizin" in str(exc3.value).lower() or "directory" in str(exc3.value).lower() or "path" in str(exc3.value).lower()
+        exc3_msg = str(exc3.value).lower()
+        assert "dizin" in exc3_msg or "directory" in exc3_msg or "path" in exc3_msg
 
         # 4. Invalid suffix
         invalid_suffix_path = tmp_path / "report.txt"
@@ -223,11 +231,12 @@ class TestReporterIsolatedUnitMethods:
 
 
 class TestRiskSummaryAndChartBuilderUnits:
-    """Explicit unit tests for compute_risk_summary calculation, exact threshold boundaries, and ChartBuilder methods."""
+    """Unit tests for compute_risk_summary, exact threshold boundaries,
+    and ChartBuilder methods."""
 
     def test_compute_risk_summary_exact_threshold_boundaries(self):
         """Validates exact risk level assignments for boundary score transitions.
-        
+
         Note: Assumes production scoring policy (CRITICAL=30, HIGH=15, MEDIUM=5, LOW=4).
         """
         def make_finding(severity: ThreatSeverity) -> ThreatFinding:
@@ -245,7 +254,9 @@ class TestRiskSummaryAndChartBuilderUnits:
         assert summary_score_5.risk_level == "ORTA"
 
         # Score 14 (2 x MEDIUM + 4 x LOW = 14 pts) -> ORTA (Score < 15)
-        summary_score_14 = r.compute_risk_summary([make_finding(ThreatSeverity.MEDIUM)] * 2 + [make_finding(ThreatSeverity.LOW)] * 4)
+        summary_score_14 = r.compute_risk_summary(
+            [make_finding(ThreatSeverity.MEDIUM)] * 2 + [make_finding(ThreatSeverity.LOW)] * 4
+        )
         assert summary_score_14.risk_level == "ORTA"
 
         # Score 15 (1 x HIGH = 15 pts) -> YÜKSEK (Score >= 15)
@@ -253,7 +264,11 @@ class TestRiskSummaryAndChartBuilderUnits:
         assert summary_score_15.risk_level == "YÜKSEK"
 
         # Score 29 (1 x HIGH + 2 x MEDIUM + 4 x LOW = 29 pts) -> YÜKSEK (Score < 30)
-        summary_score_29 = r.compute_risk_summary([make_finding(ThreatSeverity.HIGH)] + [make_finding(ThreatSeverity.MEDIUM)] * 2 + [make_finding(ThreatSeverity.LOW)] * 4)
+        summary_score_29 = r.compute_risk_summary(
+            [make_finding(ThreatSeverity.HIGH)]
+            + [make_finding(ThreatSeverity.MEDIUM)] * 2
+            + [make_finding(ThreatSeverity.LOW)] * 4
+        )
         assert summary_score_29.risk_level == "YÜKSEK"
 
         # Score 30 (1 x CRITICAL = 30 pts) -> KRİTİK (Score >= 30)
@@ -261,7 +276,12 @@ class TestRiskSummaryAndChartBuilderUnits:
         assert summary_score_30.risk_level == "KRİTİK"
 
         # Score 59 -> KRİTİK
-        summary_score_59 = r.compute_risk_summary([make_finding(ThreatSeverity.CRITICAL)] + [make_finding(ThreatSeverity.HIGH)] * 1 + [make_finding(ThreatSeverity.MEDIUM)] * 2 + [make_finding(ThreatSeverity.LOW)] * 4)
+        summary_score_59 = r.compute_risk_summary(
+            [make_finding(ThreatSeverity.CRITICAL)]
+            + [make_finding(ThreatSeverity.HIGH)]
+            + [make_finding(ThreatSeverity.MEDIUM)] * 2
+            + [make_finding(ThreatSeverity.LOW)] * 4
+        )
         assert summary_score_59.risk_level == "KRİTİK"
 
         # Score 60+ -> KRİTİK
@@ -302,7 +322,7 @@ class TestRiskSummaryAndChartBuilderUnits:
 
         # Extract chart titles assuming dataclass/object or dict representation
         titles = [getattr(c, "title", c.get("title") if isinstance(c, dict) else None) for c in charts]
-        
+
         # Verify specific expected production titles exist
         assert any("Protokol" in str(t) or "Protocol" in str(t) for t in titles if t)
         assert any("En Aktif Hostlar" in str(t) or "Talkers" in str(t) for t in titles if t)
@@ -612,7 +632,7 @@ class TestPipelineIntegration:
 
         assert output_report.exists()
         html = output_report.read_text(encoding="utf-8")
-        
+
         # Strict validation of Threat Intel rendering
         assert "Threat Intelligence Sonuçları" in html or "IOC Enrichment Sonuçları" in html
         assert "8.8.8.8" in html

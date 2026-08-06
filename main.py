@@ -155,7 +155,10 @@ def main() -> int:
             max_workers = min(10, len(public_ips))  # İsteğe bağlı olarak worker sayısını sınırlayabilirsiniz
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 results = executor.map(threat_intel.enrich, public_ips)
-                for ip, result in zip(public_ips, results):
+                # strict=True: executor.map girdiyle birebir aynı sayıda sonuç
+                # üretmeli; üretmiyorsa IP'ler sonuçlarla kayar ve yanlış IP'ye
+                # yanlış TI verisi eşlenir. Sessizce kısalmaktansa hata versin.
+                for ip, result in zip(public_ips, results, strict=True):
                     threat_intel_results[ip] = result
 
         session.close()
