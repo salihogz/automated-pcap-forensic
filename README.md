@@ -224,20 +224,20 @@ ruff format .                                       # format
 
 Ruff and pytest are configured in `pyproject.toml`; CI runs both on every push.
 
-**Current status:** 137 / 137 tests passing · **79%** total coverage (branch coverage enabled)
+**Current status:** 198 / 198 tests passing · **91%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
 | `config.py` | 100% |
+| `modules/threat_detector.py` | 97% |
+| `main.py` | 96% |
 | `modules/models.py` | 94% |
-| `modules/threat_detector.py` | 93% |
-| `modules/statistics.py` | 91% |
-| `modules/reporter.py` | 84% |
+| `modules/statistics.py` | 93% |
+| `modules/parser.py` | 91% |
+| `modules/reporter.py` | 88% |
 | `modules/threat_intel.py` | 82% |
-| `modules/parser.py` | 75% |
-| `main.py` | **0%** |
 
-`main.py` has no tests at all — it is the pipeline's orchestration layer and the largest known gap in the suite. `parser.py` is the next priority: it handles untrusted input, so it is the module that most deserves high coverage.
+`modules/threat_intel.py` is the lowest — its uncovered lines are mostly provider-specific HTTP error branches. The remaining gaps in `parser.py` are the module-level `ImportError` fallbacks for optional Scapy TLS/HTTP layers, which cannot be exercised without breaking the Scapy install.
 
 The reporter has a snapshot test against `tests/snapshots/report_snapshot.html`. When a template change is intentional, regenerate the baseline instead of hand-editing it, then review the diff:
 
