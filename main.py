@@ -27,6 +27,11 @@ from modules.threat_intel import (
 
 logger = logging.getLogger(__name__)
 
+# Paralel Threat Intelligence sorgusu için üst sınır. Sağlayıcıların ücretsiz
+# katmanları oran sınırlıdır (ör. VirusTotal: dakikada 4 istek); worker sayısını
+# artırmak sorguyu hızlandırmaz, yalnızca 429 yanıtlarını çoğaltır.
+MAX_THREAT_INTEL_WORKERS = 10
+
 
 def setup_logging(verbose: bool = False) -> None:
     """Merkezi loglama yapılandırmasını başlatır."""
@@ -74,10 +79,10 @@ def _is_public_ip(ip_str: str) -> bool:
 
 
 def print_banner() -> None:
-    banner = """
+    banner = f"""
     ===============================================================
      Automated PCAP Forensic Analysis Tool (DFIR)
-     Sürüm: 1.1.0-refactored | Adli Bilişim Paket Analiz Aracı
+     Sürüm: {config.TOOL_VERSION} | Adli Bilişim Paket Analiz Aracı
     ===============================================================
     """
     print(banner)
@@ -153,24 +158,27 @@ def main() -> int:
                 skipped_ip_count,
             )
 
-        session = build_default_session()
-        providers = build_default_providers(session)
-        threat_intel = ThreatIntelService(providers)
-
         threat_intel_results: dict[str, list[NormalizedIOCResult]] = {}
 
-        # Threat Intelligence sorgularını ThreadPoolExecutor ile paralel çalıştırma
-        if public_ips:
-            max_workers = min(10, len(public_ips))  # İsteğe bağlı olarak worker sayısını sınırlayabilirsiniz
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                results = executor.map(threat_intel.enrich, public_ips)
-                # strict=True: executor.map girdiyle birebir aynı sayıda sonuç
-                # üretmeli; üretmiyorsa IP'ler sonuçlarla kayar ve yanlış IP'ye
-                # yanlış TI verisi eşlenir. Sessizce kısalmaktansa hata versin.
-                for ip, result in zip(public_ips, results, strict=True):
-                    threat_intel_results[ip] = result
+        # Session bir context manager içinde açılır: bir sağlayıcı sorgusu
+        # beklenmedik bir hata fırlatsa dahi bağlantı havuzu kapatılır.
+        # (Önceki sürümde `session.close()` düz bir satırdı ve bu blokta
+        # oluşan herhangi bir istisnada hiç çalışmıyor, soketler process
+        # sonuna kadar açık kalıyordu.)
+        with build_default_session() as session:
+            providers = build_default_providers(session)
+            threat_intel = ThreatIntelService(providers)
 
-        session.close()
+            # Threat Intelligence sorgularını ThreadPoolExecutor ile paralel çalıştırma
+            if public_ips:
+                max_workers = min(MAX_THREAT_INTEL_WORKERS, len(public_ips))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    enrich_results = executor.map(threat_intel.enrich, public_ips)
+                    # strict=True: executor.map girdiyle birebir aynı sayıda sonuç
+                    # üretmeli; üretmiyorsa IP'ler sonuçlarla kayar ve yanlış IP'ye
+                    # yanlış TI verisi eşlenir. Sessizce kısalmaktansa hata versin.
+                    for ip, ip_results in zip(public_ips, enrich_results, strict=True):
+                        threat_intel_results[ip] = ip_results
 
         duration = perf_counter() - start_time
 
@@ -184,10 +192,10 @@ def main() -> int:
         if args.verbose:
             print("\n--- THREAT INTELLIGENCE ---")
 
-            for ip, results in threat_intel_results.items():
+            for ip, ip_results in threat_intel_results.items():
                 print(f"\nIP: {ip}")
 
-                for result in results:
+                for result in ip_results:
                     print(
                         f"  {result.source:<18} "
                         f"Malicious={result.is_malicious} "

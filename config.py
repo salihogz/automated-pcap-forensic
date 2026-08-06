@@ -7,8 +7,14 @@ BASE_DIR = Path(__file__).resolve().parent
 SAMPLES_DIR = BASE_DIR / "samples"
 REPORTS_DIR = BASE_DIR / "reports"
 TEMPLATES_DIR = BASE_DIR / "templates"
-STATIC_DIR = BASE_DIR / "static"
 LOGS_DIR = BASE_DIR / "logs"
+
+# Tek sürüm kaynağı. Daha önce üç ayrı yerde üç FARKLI değer vardı
+# (main.py banner "1.1.0-refactored", pyproject.toml "1.2.0",
+# reporter.py "1.2.0-forensic"); rapordaki "Araç Sürümü" alanı adli bir
+# belgede yer aldığı için hangi sürümün üretildiği tek bir yerden
+# okunabilmelidir.
+TOOL_VERSION = "1.2.0"
 
 # ==========================
 # General Statistics
@@ -162,7 +168,7 @@ TIMELINE_BUCKET_SECONDS = 1
 # yeniden örneklenir (bkz. reporter.ChartBuilder._build_timeline_table).
 TIMELINE_TABLE_MAX_ROWS = 40
 
-for directory in (SAMPLES_DIR, REPORTS_DIR, TEMPLATES_DIR, STATIC_DIR, LOGS_DIR):
+for directory in (SAMPLES_DIR, REPORTS_DIR, TEMPLATES_DIR, LOGS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 SUPPORTED_EXTENSIONS = (".pcap", ".pcapng")
@@ -175,13 +181,30 @@ SUPPORTED_EXTENSIONS = (".pcap", ".pcapng")
 # bakabilmek zorunda olduğu için. Ölçüm (300 bin paket, gerçekçi IP
 # çeşitliliği): paket başına ~291 bayt, tespit sırasında zirve ~480 bayt.
 #
-# Bellek paket SAYISIYLA orantılıdır, dosya boyutuyla değil: küçük paketlerden
-# (64 bayt) oluşan bir dosya, MB başına çok daha fazla paket içerir. En kötü
-# durumda dosya boyutunun ~5 katı bellek gerekebilir. Bu yüzden eşik aşıldığında
-# analiz REDDEDİLMEZ -- meşru büyük capture'ları engellemek doğru olmaz -- yalnızca
-# uyarı loglanır ki OOM ile aniden kesilme sürpriz olmasın.
+# Bellek paket SAYISIYLA orantılıdır, dosya boyutuyla DEĞİL. Bu ayrım uyarının
+# nasıl yazıldığını belirler, çünkü iki uç arasındaki fark çok büyüktür:
+#
+#   - 64 baytlık minimum paketlerden oluşan bir dosyada MB başına ~16.000 paket
+#     vardır; paket başına ~300 bayt ile dosya boyutunun ~5 KATI bellek gerekir.
+#   - Ölçüm (1,3 GB'lık gerçek capture, ortalama paket ~5,7 KB): 236.843 paket,
+#     zirve 179 MB RSS -- yani dosya boyutunun ~0,14 KATI.
+#
+# Tek bir çarpanla "X MB gerekecek" demek bu yüzden yanıltıcıdır: kötümser uç,
+# büyük paketli capture'larda gerçek kullanımın 30 katından fazlasını gösterip
+# analisti dosyayı gereksiz yere bölmeye iter. Uyarı bu nedenle tek bir sayı
+# değil, "paket boyutuna göre şu aralıkta" bilgisi verir (bkz.
+# parser._warn_if_large).
+#
+# Eşik aşıldığında analiz hiçbir koşulda REDDEDİLMEZ -- meşru büyük bir delili
+# işlemeyi reddetmek adli bir araçta kabul edilemez; amaç yalnızca, süreç OOM
+# ile kesilirse analistin sebebini bilmesidir.
 LARGE_CAPTURE_WARNING_BYTES = 500 * 1024 * 1024  # 500 MB
+# Minimum boyutlu (64 bayt) paketlerden oluşan capture için üst sınır.
 LARGE_CAPTURE_WORST_CASE_MEMORY_FACTOR = 5
+# 1,3 GB'lık gerçek bir capture üzerinde ölçülen tipik oran (ortalama ~5,7 KB
+# paket). Alt sınır olarak değil, "büyük paketli capture'larda beklenen"
+# değer olarak sunulur.
+LARGE_CAPTURE_TYPICAL_MEMORY_FACTOR = 0.15
 
 PROTOCOL_MAP = {
     1: "ICMP",
@@ -229,5 +252,6 @@ EXFILTRATION_THRESHOLD = 50 * 1024 * 1024
 LONG_DOMAIN_LENGTH = 50
 DGA_ENTROPY_THRESHOLD = 3.5
 
-DEFAULT_REPORT_NAME = "forensic_report.html"
+# Rapor dosya adı reporter.py tarafından kaynak capture'ın adından türetilir
+# (`<stem>_report.html`), bu yüzden burada sabit bir rapor adı tutulmaz.
 DEFAULT_LOG_NAME = "analysis.log"
