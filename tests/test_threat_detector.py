@@ -223,6 +223,57 @@ def test_port_scan_ignores_icmp_packets():
     assert not any(f.rule_id == "SEC-PORT-SCAN-001" for f in findings)
 
 
+def test_port_scan_ignores_dns_responses_from_local_resolver():
+    """Yerel DNS sunucusunun istemciye verdiği cevaplar port taraması sayılmamalıdır.
+
+    Gerçek bir capture'da gözlemlenen regresyon: bir DNS çözümleyicisi
+    (10.106.4.20:53) istemcinin her sorgusuna farklı bir ephemeral porta
+    (33615, 38777, 50922, ...) cevap verdiği için kural bunu "60 saniyede
+    N farklı porta erişim" olarak okuyor, tamamen temiz bir capture için
+    HIGH severity port taraması bulgusu üretip raporun genel risk
+    seviyesini KRİTİK'e çıkarıyordu. Bu paketlerin ayırt edici özelliği
+    yönüdür: SERVİS portundan (53) EPHEMERAL porta gitmeleri.
+    """
+    packets = [
+        PacketInfo(
+            id=i,
+            epoch_time=1000.0 + i * 0.5,
+            src_ip="10.106.4.20",
+            dst_ip="10.30.80.23",
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="UDP",
+            application_protocol="DNS",
+            length=300,
+            src_port=53,
+            dst_port=33615 + i * 137,  # her cevap farklı bir ephemeral porta
+            tcp_flags=None,
+        )
+        for i in range(40)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(packets)
+
+    assert not any(f.rule_id == "SEC-PORT-SCAN-001" for f in findings)
+
+
+def test_port_scan_still_detects_scan_towards_service_ports():
+    """Yanıt filtresi, ephemeral kaynak porttan servis portlarına yapılan
+    gerçek taramayı elemamalıdır (filtrenin fazla geniş olmadığının kanıtı)."""
+    packets = [
+        _make_scan_packet(
+            1000.0 + i * 0.2, "10.0.0.5", "10.0.0.10", 20 + i, transport="UDP", packet_id=i
+        )
+        for i in range(20)
+    ]
+    detector = ThreatDetector()
+    findings = detector.detect(packets)
+
+    port_scan_findings = [f for f in findings if f.rule_id == "SEC-PORT-SCAN-001"]
+    assert len(port_scan_findings) == 1
+    assert port_scan_findings[0].source == "10.0.0.5"
+
+
 def test_port_scan_multiple_bursts_same_pair_produce_multiple_findings():
     """
     Aynı (src_ip, dst_ip) çifti, aralarında zaman penceresinden (60s)

@@ -9,6 +9,7 @@ import logging
 import math
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
+from typing import cast
 
 import config
 from modules.models import GeneralStatistics, PacketInfo, ThreatFinding, ThreatSeverity
@@ -56,6 +57,36 @@ class ThreatDetector:
         if packet.epoch_time is None or packet.epoch_time <= 0:
             return False
         return packet.transport_protocol in ("TCP", "UDP")
+
+    @staticmethod
+    def _is_probable_response_packet(packet: PacketInfo) -> bool:
+        """Paketin, bir isteğe verilen YANIT olma olasılığının yüksek olup
+        olmadığını kestirir (servis portundan ephemeral porta giden trafik).
+
+        Port taraması, tarayıcının ephemeral kaynak portundan hedefteki
+        SERVİS portlarına doğru yapılır. Ters yön (servis portu -> ephemeral
+        port) bir taramanın değil, normal bir istemci-sunucu diyaloğunun
+        dönüş bacağıdır. `_detect_port_scan` yalnızca farklı `dst_port`
+        saydığı için bu ayrım yapılmazsa, istemcinin her sorgusuna farklı
+        bir ephemeral porttan cevap veren sıradan bir DNS sunucusu
+        (53 -> 33615, 53 -> 38777, 53 -> 50922 ...) "onlarca farklı porta
+        erişim" olarak okunur ve tamamen temiz bir capture yanlışlıkla
+        HIGH severity port taraması bulgusu üretir.
+
+        BİLİNEN SINIRLILIK: Kaynak portunu bilinçli olarak düşük bir servis
+        portuna sabitleyen taramalar (ör. `nmap -g 53`, güvenlik duvarı
+        atlatma amaçlı) bu filtre tarafından elenir. Bu, bilinçli bir
+        değiş-tokuştur: söz konusu teknik nadirdir, buna karşılık filtrenin
+        engellediği yanlış-pozitif (her DNS/NTP/QUIC yanıtı) her capture'da
+        ortaya çıkar ve raporun risk seviyesini tümüyle anlamsızlaştırır.
+        TCP tabanlı taramalar ayrıca `_detect_syn_scan` tarafından bayrak
+        (flag) düzeyinde, bu filtreden bağımsız olarak yakalanmaya devam eder.
+        """
+        src_port = packet.src_port
+        dst_port = packet.dst_port
+        if src_port is None or dst_port is None:
+            return False
+        return src_port < config.EPHEMERAL_PORT_MIN <= dst_port
 
     @staticmethod
     def _is_egress_traffic(src_ip: str, dst_ip: str) -> bool:
@@ -279,7 +310,10 @@ class ThreatDetector:
         pair_buckets: dict[tuple[str, str], list[PacketInfo]] = defaultdict(list)
 
         for pkt in packets:
-            if self._is_valid_transport_packet(pkt):
+            # Yanıt trafiği (servis portu -> ephemeral port) taramaya değil,
+            # normal bir diyaloğun dönüş bacağına aittir; sayıma alınırsa
+            # her DNS/NTP/QUIC sunucusu "port tarayıcı" gibi görünür.
+            if self._is_valid_transport_packet(pkt) and not self._is_probable_response_packet(pkt):
                 pair_buckets[(pkt.src_ip, pkt.dst_ip)].append(pkt)  # type: ignore[arg-type]
 
         for (src_ip, dst_ip), pair_packets in pair_buckets.items():
@@ -705,6 +739,3 @@ class ThreatDetector:
 
         logger.info("Exfiltration kuralı tamamlandı. %d bulgu üretildi.", len(findings))
         return findings
-
-
-from typing import cast

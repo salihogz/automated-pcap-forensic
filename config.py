@@ -27,6 +27,20 @@ TOP_N_PORTS = 10
 PORT_SCAN_TIME_WINDOW_SECONDS: int = 60
 PORT_SCAN_PORT_THRESHOLD: int = 15
 
+# Ephemeral (geçici/istemci) port aralığının başlangıcı. Linux varsayılanı
+# 32768-60999, IANA önerisi 49152-65535'tir; ikisini de kapsayacak şekilde
+# daha geniş (daha temkinli) olan alt sınır seçilmiştir.
+#
+# NEDEN GEREKLİ: Bir port taramasında paketler tarayıcının EPHEMERAL kaynak
+# portundan hedefin SERVİS portuna gider. Bunun tam TERSİ yön -yani servis
+# portundan ephemeral porta- neredeyse her zaman bir isteğe verilen
+# YANITTIR. Bu ayrım yapılmadığında, yerel DNS sunucusunun istemciye
+# gönderdiği sıradan cevaplar (53 -> 33615, 53 -> 38777, 53 -> 50922 ...)
+# "60 saniyede 23 farklı porta erişim" gibi görünür ve tamamen temiz bir
+# capture HIGH severity "Port Taraması" bulgusuyla KRİTİK risk seviyesine
+# çıkar (bkz. threat_detector._is_probable_response_packet).
+EPHEMERAL_PORT_MIN: int = 32768
+
 # --------------------------------------------------------------------
 # Threat Detection: Diğer Kurallar
 # --------------------------------------------------------------------
