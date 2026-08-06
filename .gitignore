@@ -58,3 +58,8 @@ Thumbs.db
 # samples/malicious/ altında tutuluyor, yalnızca .gitkeep izleniyor.
 *.pcap
 *.pcapng
+
+# İstisna: depoya kasıtlı olarak eklenen sentetik demo capture. İçindeki tüm
+# adresler RFC 5737 / RFC 1918 aralıklarındandır, gerçek bir ağa ait değildir.
+# scripts/generate_sample_capture.py ile yeniden üretilebilir.
+!samples/malicious/demo_capture.pcapng
