@@ -339,3 +339,177 @@ def test_parse_empty_pcap_returns_empty_list(tmp_path):
     result = parser.parse()
 
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _extract_dns_answers() testleri
+#
+# DNS cevaplarındaki A/AAAA kayıtlarından (IP -> sorgulanan domain) eşlemesi
+# çıkarılır. Rapordaki "hangi IP hangi alan adına aitti" bilgisi buradan gelir,
+# dolayısıyla bozuk/eksik cevaplarda istisna fırlatmak yerine sessizce boş
+# dönmesi kritik: tek bir garip DNS paketi tüm ayrıştırmayı düşürmemeli.
+# ---------------------------------------------------------------------------
+
+def _dns_response(qname="example.com", rdata="93.184.216.34", rtype=1):
+    """A/AAAA cevabı içeren bir DNS yanıt paketi üretir."""
+    from scapy.all import DNSQR, DNSRR
+
+    return (
+        Ether()
+        / IP(src="10.0.0.53", dst="10.0.0.1")
+        / UDP(sport=53, dport=40000)
+        / DNS(
+            id=1,
+            qr=1,
+            qd=DNSQR(qname=qname),
+            an=DNSRR(rrname=qname, type=rtype, rdata=rdata),
+            ancount=1,
+        )
+    )
+
+
+def test_extract_dns_answers_returns_ip_to_domain_mapping(dummy_parser):
+    answers = dummy_parser._extract_dns_answers(_dns_response())
+
+    assert answers == (("93.184.216.34", "example.com"),)
+
+
+def test_extract_dns_answers_strips_trailing_dot_from_qname(dummy_parser):
+    """Scapy qname'i 'example.com.' olarak verir; sondaki nokta atılmalı.
+
+    Aksi halde aynı alan adı raporda iki farklı anahtar gibi görünür.
+    """
+    answers = dummy_parser._extract_dns_answers(_dns_response(qname="example.com."))
+
+    assert answers[0][1] == "example.com"
+
+
+def test_extract_dns_answers_ignores_queries_without_answers(dummy_parser):
+    """Sorgu paketinde (qr=0) henüz cevap yoktur."""
+    from scapy.all import DNSQR
+
+    query = (
+        Ether()
+        / IP(src="10.0.0.1", dst="10.0.0.53")
+        / UDP(sport=40000, dport=53)
+        / DNS(rd=1, qd=DNSQR(qname="example.com"))
+    )
+
+    assert dummy_parser._extract_dns_answers(query) == ()
+
+
+def test_extract_dns_answers_returns_empty_for_non_dns_packet(dummy_parser):
+    assert dummy_parser._extract_dns_answers(make_tcp_packet()) == ()
+
+
+def test_extract_dns_answers_skips_non_address_record_types(dummy_parser):
+    """A/AAAA dışındaki kayıtlar (ör. CNAME) IP eşlemesi üretmez."""
+    answers = dummy_parser._extract_dns_answers(
+        _dns_response(rdata="alias.example.com", rtype=5)
+    )
+
+    assert answers == ()
+
+
+# ---------------------------------------------------------------------------
+# _extract_dns_query_info() testleri
+# ---------------------------------------------------------------------------
+
+def test_extract_dns_query_info_returns_name_and_type(dummy_parser):
+    from scapy.all import DNSQR
+
+    packet = (
+        Ether()
+        / IP(src="10.0.0.1", dst="10.0.0.53")
+        / UDP(sport=40000, dport=53)
+        / DNS(rd=1, qd=DNSQR(qname="tunnel.example.com", qtype="TXT"))
+    )
+
+    name, qtype = dummy_parser._extract_dns_query_info(packet)
+
+    assert name == "tunnel.example.com"
+    assert qtype == "TXT"
+
+
+def test_extract_dns_query_info_maps_unknown_qtype_to_its_number(dummy_parser):
+    """Bilinmeyen kayıt tipi düşürülmemeli; sayısal değeriyle korunmalı."""
+    from scapy.all import DNSQR
+
+    packet = (
+        Ether()
+        / IP(src="10.0.0.1", dst="10.0.0.53")
+        / UDP(sport=40000, dport=53)
+        / DNS(rd=1, qd=DNSQR(qname="example.com", qtype=99))
+    )
+
+    _, qtype = dummy_parser._extract_dns_query_info(packet)
+
+    assert qtype == "99"
+
+
+def test_extract_dns_query_info_returns_none_for_non_dns_packet(dummy_parser):
+    assert dummy_parser._extract_dns_query_info(make_tcp_packet()) == (None, None)
+
+
+def test_extract_dns_query_info_returns_none_when_question_section_missing(dummy_parser):
+    packet = (
+        Ether()
+        / IP(src="10.0.0.1", dst="10.0.0.53")
+        / UDP(sport=40000, dport=53)
+        / DNS(rd=1, qd=None)
+    )
+
+    assert dummy_parser._extract_dns_query_info(packet) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# Port tabanlı uygulama protokolü tespiti
+#
+# Scapy katmanı tanımadığında port numarasına düşülür.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("sport", "dport", "transport", "expected"),
+    [
+        (40000, 22, "TCP", "SSH"),
+        (40000, 21, "TCP", "FTP"),
+        (20, 40000, "TCP", "FTP"),
+        (68, 67, "UDP", "DHCP"),
+        (40000, 123, "UDP", "NTP"),
+        (40000, 161, "UDP", "SNMP"),
+        (162, 40000, "UDP", "SNMP"),
+    ],
+)
+def test_extract_application_protocol_falls_back_to_well_known_ports(
+    dummy_parser, sport, dport, transport, expected
+):
+    packet = make_tcp_packet(sport=sport, dport=dport)
+    result = dummy_parser._extract_application_protocol(packet, sport, dport, transport)
+
+    assert result == expected
+
+
+def test_extract_application_protocol_returns_none_for_unknown_ports(dummy_parser):
+    packet = make_tcp_packet(sport=40000, dport=41000)
+
+    assert dummy_parser._extract_application_protocol(packet, 40000, 41000, "TCP") is None
+
+
+# ---------------------------------------------------------------------------
+# Akış düzeyinde hata: dosya bozuksa fail-fast
+# ---------------------------------------------------------------------------
+
+def test_parse_raises_runtime_error_when_stream_is_corrupt(tmp_path):
+    """Paket düzeyinde hata tolere edilir, AKIŞ düzeyinde hata edilmez.
+
+    Bozuk bir dosyadan yarım bir paket listesi döndürmek adli açıdan
+    tehlikelidir: analist eksik veriyi tam sanır. Bu yüzden akış hatası
+    RuntimeError'a çevrilip yukarı fırlatılır.
+    """
+    corrupt = tmp_path / "corrupt.pcap"
+    corrupt.write_bytes(b"bunlar gecerli bir pcap baslik degil" * 4)
+
+    parser = PCAPParser(corrupt)
+
+    with pytest.raises(RuntimeError, match="PCAP okuma hatası"):
+        parser.parse()
