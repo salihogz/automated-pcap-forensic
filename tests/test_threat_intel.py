@@ -33,7 +33,6 @@ from modules.threat_intel import (
     ProviderErrorCode,
     ThreatIntelProvider,
     ThreatIntelService,
-    URLHausProvider,
     VirusTotalProvider,
     build_default_providers,
     build_default_session,
@@ -81,7 +80,6 @@ PROVIDER_CLASSES: tuple[type[ThreatIntelProvider], ...] = (
     VirusTotalProvider,
     AbuseIPDBProvider,
     AlienVaultOTXProvider,
-    URLHausProvider,
 )
 
 
@@ -113,15 +111,6 @@ def test_parse_iso8601_valid_and_invalid():
 
     assert ti._parse_iso8601(None) is None
     assert ti._parse_iso8601("clearly not a date") is None
-
-
-def test_parse_urlhaus_datetime_valid_and_invalid():
-    dt = ti._parse_urlhaus_datetime("2026-01-15 10:00:00 UTC")
-    assert dt is not None
-    assert dt.tzinfo == timezone.utc
-
-    assert ti._parse_urlhaus_datetime(None) is None
-    assert ti._parse_urlhaus_datetime("garbage") is None
 
 
 def test_calculate_vt_confidence():
@@ -320,53 +309,6 @@ def test_alienvault_otx_query_success_no_pulses():
     assert result.categories == ()
 
 
-def test_urlhaus_query_success_with_urls():
-    payload = {
-        "query_status": "ok",
-        "url_count": "2",
-        "urls": [
-            {"threat": "malware_download", "date_added": "2026-01-03 10:00:00 UTC"},
-            {"threat": "malware_download", "date_added": "2026-01-05 10:00:00 UTC"},
-        ],
-    }
-    session = _fake_session(_FakeResponse(json_data=payload))
-    provider = URLHausProvider(session, api_key="urlhaus-key")
-
-    result = provider.query("2.2.2.2")
-
-    assert result.source == URLHausProvider.name
-    assert result.is_malicious is True
-    assert result.raw_score == 2
-    assert result.categories == ("malware_download",)
-    assert result.last_seen is not None
-
-    _, kwargs = session.request.call_args
-    assert kwargs["data"]["host"] == "2.2.2.2"
-
-
-def test_urlhaus_query_no_results():
-    payload = {"query_status": "no_results"}
-    session = _fake_session(_FakeResponse(json_data=payload))
-    provider = URLHausProvider(session, api_key="urlhaus-key")
-
-    result = provider.query("3.3.3.3")
-
-    assert result.is_malicious is None
-    assert result.raw_score == 0
-    assert result.provider_error_code is None
-
-
-def test_urlhaus_query_unexpected_status():
-    payload = {"query_status": "invalid_host"}
-    session = _fake_session(_FakeResponse(json_data=payload))
-    provider = URLHausProvider(session, api_key="urlhaus-key")
-
-    result = provider.query("4.4.4.4")
-
-    assert result.provider_error_code == ProviderErrorCode.UNEXPECTED_STATUS
-    assert result.is_malicious is None
-
-
 # ======================================================================
 # ORTAK HATA YOLLARI (tüm provider'lar için parametrized)
 # ======================================================================
@@ -562,19 +504,17 @@ def test_build_default_providers_reads_env_vars(monkeypatch):
     monkeypatch.setenv(ti.config.VIRUSTOTAL_API_KEY_ENV, "vt-secret")
     monkeypatch.delenv(ti.config.ABUSEIPDB_API_KEY_ENV, raising=False)
     monkeypatch.delenv(ti.config.OTX_API_KEY_ENV, raising=False)
-    monkeypatch.delenv(ti.config.URLHAUS_API_KEY_ENV, raising=False)
 
     session = _fake_session()
     providers = build_default_providers(session)
 
-    assert len(providers) == 4
+    assert len(providers) == 3
 
     # Sıralamadan bağımsız provider seti kontrolü
     expected_names = {
         VirusTotalProvider.name,
         AbuseIPDBProvider.name,
         AlienVaultOTXProvider.name,
-        URLHausProvider.name,
     }
     provider_by_name = {p.name: p for p in providers}
     assert set(provider_by_name.keys()) == expected_names
@@ -582,4 +522,3 @@ def test_build_default_providers_reads_env_vars(monkeypatch):
     assert provider_by_name[VirusTotalProvider.name].is_configured() is True
     assert provider_by_name[AbuseIPDBProvider.name].is_configured() is False
     assert provider_by_name[AlienVaultOTXProvider.name].is_configured() is False
-    assert provider_by_name[URLHausProvider.name].is_configured() is False

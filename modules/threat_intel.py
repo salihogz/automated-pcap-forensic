@@ -2,7 +2,7 @@
 Threat Intelligence - IOC Enrichment Modülü.
 
 Bu modül bir IP adresini birden fazla açık kaynak Threat Intelligence
-sağlayıcısına (VirusTotal, AbuseIPDB, AlienVault OTX, URLHaus) sorgular,
+sağlayıcısına (VirusTotal, AbuseIPDB, AlienVault OTX) sorgular,
 her sağlayıcının kendine özgü yanıt şemasını ortak bir veri modeline
 (``NormalizedIOCResult``) dönüştürür ve sonuçları liste halinde döndürür.
 
@@ -149,18 +149,6 @@ def _parse_iso8601(value: Any) -> datetime | None:
         return datetime.fromisoformat(normalized)
     except ValueError:
         logger.warning("ISO 8601 tarih ayrıştırılamadı: %r", value)
-        return None
-
-
-def _parse_urlhaus_datetime(value: Any) -> datetime | None:
-    """URLHaus'a özgü 'YYYY-MM-DD HH:MM:SS UTC' formatını ayrıştırır."""
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.strptime(value.strip(), "%Y-%m-%d %H:%M:%S UTC")  # noqa: DTZ007
-        return parsed.replace(tzinfo=timezone.utc)
-    except ValueError:
-        logger.warning("URLHaus tarih formatı ayrıştırılamadı: %r", value)
         return None
 
 
@@ -570,103 +558,6 @@ class AlienVaultOTXProvider(ThreatIntelProvider):
             )
 
 
-class URLHausProvider(ThreatIntelProvider):
-    """Sadece URLHaus API'sini bilir (host endpoint)."""
-
-    name: str = "URLHaus"
-
-    def _extract_provider_error(self, response: requests.Response) -> str:
-        """URLHaus özel hata ayrıştırıcısı: {"query_status": "...", "system_error": "..."}"""
-        try:
-            payload = response.json()
-            if isinstance(payload, dict):
-                system_error = payload.get("system_error")
-                query_status = payload.get("query_status")
-                if system_error:
-                    return f"{query_status or 'error'}: {system_error}"
-                if query_status and query_status != "ok":
-                    return f"status_{query_status}"
-        except (ValueError, requests.exceptions.JSONDecodeError):
-            pass
-        return super()._extract_provider_error(response)
-
-    def query(self, ip: str | IPAddressType) -> NormalizedIOCResult | None:
-        queried_at = _utc_now()
-        ip_str = str(ip)
-        url = f"{config.URLHAUS_BASE_URL}/host/"
-        data = {"host": ip_str}
-
-        response, err_code, err_msg = self._execute_request("POST", url, data=data)
-        if response is None:
-            return self._build_error_result(
-                ip_str,
-                err_code or ProviderErrorCode.REQUEST_ERROR,
-                err_msg or "İstek başarısız oldu.",
-                queried_at,
-            )
-
-        try:
-            payload = response.json()
-            query_status = payload.get("query_status")
-
-            if query_status == "no_results":
-                return NormalizedIOCResult(
-                    source=self.name,
-                    ip=ip_str,
-                    is_malicious=None,
-                    raw_score=0,
-                    categories=(),
-                    last_seen=None,
-                    queried_at=queried_at,
-                    provider_error_code=None,
-                    provider_error_message=None,
-                    confidence=None,
-                )
-
-            if query_status != "ok":
-                return self._build_error_result(
-                    ip_str,
-                    ProviderErrorCode.UNEXPECTED_STATUS,
-                    f"URLHaus query_status: {query_status}",
-                    queried_at,
-                )
-
-            urls = payload.get("urls", []) or []
-            url_count = _safe_int(payload.get("url_count"), default=len(urls)) or 0
-
-            threats: set[str] = set()
-            latest_seen: datetime | None = None
-            for entry in urls:
-                if isinstance(entry, dict):
-                    threat = entry.get("threat")
-                    if threat:
-                        threats.add(str(threat))
-                    candidate = _parse_urlhaus_datetime(entry.get("date_added"))
-                    if candidate and (latest_seen is None or candidate > latest_seen):
-                        latest_seen = candidate
-
-            return NormalizedIOCResult(
-                source=self.name,
-                ip=ip_str,
-                is_malicious=url_count > 0,
-                raw_score=url_count,
-                categories=tuple(sorted(threats)),
-                last_seen=latest_seen,
-                queried_at=queried_at,
-                provider_error_code=None,
-                provider_error_message=None,
-                confidence=None,
-            )
-        except (ValueError, TypeError, requests.exceptions.JSONDecodeError) as exc:
-            self._log_warning("Yanıt ayrıştırılamadı: %s", exc)
-            return self._build_error_result(
-                ip_str,
-                ProviderErrorCode.PARSE_ERROR,
-                f"JSON parse error: {exc}",
-                queried_at,
-            )
-
-
 # ======================================================================
 # SERVICE
 # ======================================================================
@@ -805,5 +696,4 @@ def build_default_providers(session: requests.Session) -> list[ThreatIntelProvid
         VirusTotalProvider(session, os.getenv(config.VIRUSTOTAL_API_KEY_ENV)),
         AbuseIPDBProvider(session, os.getenv(config.ABUSEIPDB_API_KEY_ENV)),
         AlienVaultOTXProvider(session, os.getenv(config.OTX_API_KEY_ENV)),
-        URLHausProvider(session, os.getenv(config.URLHAUS_API_KEY_ENV)),
     ]

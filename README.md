@@ -29,7 +29,6 @@ The core functionality of the project has been completed and is fully operationa
     - VirusTotal
     - AbuseIPDB
     - AlienVault OTX
-    - URLHaus
 - HTML report generation
 - Risk scoring
 - Environment-based API configuration (.env)

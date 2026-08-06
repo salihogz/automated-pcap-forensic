@@ -96,7 +96,6 @@ THREAT_INTEL_ALLOWED_METHODS = (
 VIRUSTOTAL_BASE_URL = "https://www.virustotal.com/api/v3"
 ABUSEIPDB_BASE_URL = "https://api.abuseipdb.com/api/v2"
 OTX_BASE_URL = "https://otx.alienvault.com/api/v1"
-URLHAUS_BASE_URL = "https://urlhaus-api.abuse.ch/v1"
 
 # 5. Provider Ayarları
 ABUSEIPDB_MAX_AGE_DAYS = 90
@@ -138,7 +137,6 @@ ABUSEIPDB_CATEGORY_MAP: dict[int, str] = {
 VIRUSTOTAL_API_KEY_ENV = "VT_API_KEY"
 ABUSEIPDB_API_KEY_ENV = "ABUSEIPDB_API_KEY"
 OTX_API_KEY_ENV = "OTX_API_KEY"
-URLHAUS_API_KEY_ENV = "URLHAUS_API_KEY"
 
 
 TIMELINE_BUCKET_SECONDS = 1

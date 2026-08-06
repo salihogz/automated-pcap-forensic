@@ -36,7 +36,6 @@ API keys for threat-intel providers are read from `.env` (via `python-dotenv`, l
 - `VT_API_KEY` (VirusTotal)
 - `ABUSEIPDB_API_KEY` (AbuseIPDB)
 - `OTX_API_KEY` (AlienVault OTX)
-- `URLHAUS_API_KEY` (URLHaus)
 
 A provider with no key configured is skipped (`ThreatIntelProvider.is_configured()`), not treated as an error.
 
