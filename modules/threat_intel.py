@@ -102,11 +102,6 @@ class NormalizedIOCResult:
     provider_error_message: str | None
     confidence: float | None
 
-    @property
-    def error_message(self) -> str | None:
-        """Geriye dönük test uyumluluğu için provider_error_message property'si."""
-        return self.provider_error_message
-
 
 # ======================================================================
 # PARSING HELPERS
@@ -566,8 +561,15 @@ class AlienVaultOTXProvider(ThreatIntelProvider):
 class ThreatIntelService:
     """Provider'ları yönetir, IP'yi provider'lara gönderir, sonuçları toplar.
 
-    Not: Metotlar ve veri yapıları thread-safe biçimde tasarlanmıştır. Gelecek
-    sürümlerde provider sorguları ThreadPoolExecutor ile paralel hale getirilebilir.
+    Eşzamanlılık: ``main.py`` bu servisin ``enrich()`` metodunu bir
+    ``ThreadPoolExecutor`` içinden, IP başına bir görev olarak çağırır.
+    Paylaşılan tek durum ``self._cache`` sözlüğüdür; CPython'da tekil dict
+    okuma/yazma işlemleri atomiktir, dolayısıyla sözlük bozulmaz. Yarış
+    durumunun tek olası sonucu, aynı IP eşzamanlı olarak iki kez istenirse
+    sorgunun iki kez yapılmasıdır — bu bir kayıp değil, yalnızca kaçırılmış
+    bir önbellek isabetidir. Kilit eklenmemesi bilinçlidir: kilit, tüm
+    ağ isteklerini seri hale getirerek paralelliğin kendisini ortadan
+    kaldırırdı.
     """
 
     def __init__(self, providers: list[ThreatIntelProvider]) -> None:
@@ -622,24 +624,6 @@ class ThreatIntelService:
 
         self._cache[ip_str] = results
         return results
-
-    def enrich_findings_only(self, findings: list[Any]) -> dict[str, list[NormalizedIOCResult]]:
-        """5. İyileştirme: Sadece bulgularda geçen (saldırgan/şüpheli) IP adreslerini hedefler."""
-        target_ips: set[str] = set()
-
-        for finding in findings:
-            # Bulgu nesnesinde tanımlı IP attributes okunur (src_ip, dst_ip, ip, target_ip vb.)
-            for attr in ("src_ip", "dst_ip", "ip", "target_ip", "source_ip"):
-                val = getattr(finding, attr, None)
-                if val and isinstance(val, str):
-                    try:
-                        if ipaddress.ip_address(val).is_global:
-                            target_ips.add(val)
-                    except ValueError:
-                        pass
-
-        logger.info("Bulgulardan tespit edilen %d adet public IP sorgulanıyor...", len(target_ips))
-        return {ip: self.enrich(ip) for ip in target_ips}
 
     @staticmethod
     def _validate_ip(ip: str) -> IPAddressType:

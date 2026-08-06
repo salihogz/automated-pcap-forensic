@@ -324,8 +324,8 @@ def test_query_handles_timeout(provider_cls):
     assert result.provider_error_code == ProviderErrorCode.TIMEOUT
     assert result.is_malicious is None
     assert result.raw_score is None
-    assert result.error_message is not None
-    assert "timeout" in result.error_message.lower() or "timed out" in result.error_message.lower()
+    assert result.provider_error_message is not None
+    assert "timeout" in result.provider_error_message.lower() or "timed out" in result.provider_error_message.lower()
 
 
 @pytest.mark.parametrize("provider_cls", PROVIDER_CLASSES)
@@ -336,8 +336,8 @@ def test_query_handles_connection_error(provider_cls):
     result = provider.query("1.2.3.4")
 
     assert result.provider_error_code == ProviderErrorCode.CONNECTION_ERROR
-    assert result.error_message is not None
-    assert "connection" in result.error_message.lower()
+    assert result.provider_error_message is not None
+    assert "connection" in result.provider_error_message.lower()
 
 
 @pytest.mark.parametrize("provider_cls", PROVIDER_CLASSES)
@@ -348,8 +348,8 @@ def test_query_handles_generic_request_exception(provider_cls):
     result = provider.query("1.2.3.4")
 
     assert result.provider_error_code == ProviderErrorCode.REQUEST_ERROR
-    assert result.error_message is not None
-    assert "boom" in result.error_message.lower()
+    assert result.provider_error_message is not None
+    assert "boom" in result.provider_error_message.lower()
 
 
 @pytest.mark.parametrize("provider_cls", PROVIDER_CLASSES)
@@ -367,8 +367,8 @@ def test_query_handles_http_error_status(provider_cls):
 
     assert result.provider_error_code == ProviderErrorCode.HTTP_ERROR
     assert result.is_malicious is None
-    assert result.error_message is not None
-    assert "429" in result.error_message or "too many requests" in result.error_message.lower()
+    assert result.provider_error_message is not None
+    assert "429" in result.provider_error_message or "too many requests" in result.provider_error_message.lower()
 
 
 @pytest.mark.parametrize("provider_cls", PROVIDER_CLASSES)
@@ -381,8 +381,8 @@ def test_query_handles_malformed_json(provider_cls):
 
     assert result.provider_error_code == ProviderErrorCode.PARSE_ERROR
     assert result.is_malicious is None
-    assert result.error_message is not None
-    assert "json" in result.error_message.lower() or "bozuk" in result.error_message.lower()
+    assert result.provider_error_message is not None
+    assert "json" in result.provider_error_message.lower() or "bozuk" in result.provider_error_message.lower()
 
 
 @pytest.mark.parametrize("provider_cls", PROVIDER_CLASSES)

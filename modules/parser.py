@@ -80,6 +80,14 @@ class PCAPParser:
         REDDEDİLMEZ: meşru büyük capture'ları engellemek adli bir araçta kabul
         edilemez. Amaç yalnızca, işlem OOM ile aniden kesilirse analistin
         sebebini bilmesi.
+
+        Uyarı tek bir sayı yerine ARALIK verir. Bellek paket sayısıyla orantılı
+        olduğundan, aynı dosya boyutu paket boyutuna göre çok farklı bellek
+        gerektirir: minimum boyutlu (64 bayt) paketlerle dosya boyutunun ~5
+        katı, büyük paketlerle ~0,15 katı. Tek bir kötümser çarpan basmak
+        (önceki davranış) 1,3 GB'lık gerçek bir capture için "6513 MB
+        gerekebilir" diyordu; gerçekte 179 MB kullanıldı. Bu 36 kat sapma,
+        analisti gereksiz yere dosyayı bölmeye yönlendirir.
         """
         try:
             size_bytes = self.file_path.stat().st_size
@@ -90,12 +98,16 @@ class PCAPParser:
             return
 
         size_mb = size_bytes / (1024 * 1024)
+        typical_mb = size_mb * config.LARGE_CAPTURE_TYPICAL_MEMORY_FACTOR
         worst_case_mb = size_mb * config.LARGE_CAPTURE_WORST_CASE_MEMORY_FACTOR
         logger.warning(
-            "Büyük capture (%.0f MB). Paketlerin tamamı bellekte tutulur; "
-            "en kötü durumda ~%.0f MB RAM gerekebilir. Bellek yetersizse "
-            "capture'ı editcap gibi bir araçla parçalara bölüp ayrı ayrı analiz edin.",
+            "Büyük capture (%.0f MB). Paketlerin tamamı bellekte tutulur. "
+            "Gereken RAM paket SAYISINA bağlıdır: büyük paketli bir capture'da "
+            "~%.0f MB, yalnızca minimum boyutlu (64 bayt) paketlerden oluşan en "
+            "kötü durumda ~%.0f MB. Bellek yetersiz kalırsa capture'ı editcap "
+            "gibi bir araçla parçalara bölüp ayrı ayrı analiz edin.",
             size_mb,
+            typical_mb,
             worst_case_mb,
         )
 
@@ -232,12 +244,14 @@ class PCAPParser:
             if not query_name:
                 query_name = None
 
+            # Haritada olmayan bir qtype sessizce kaybolmaz, ham sayısal
+            # değeriyle korunur (kanıt kaybı olmaması için).
             qtype_val = dns_layer.qd.qtype
-            qtype_map = getattr(config, "DNS_QTYPE_MAP", {
-                1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 10: "NULL",
-                12: "PTR", 15: "MX", 16: "TXT", 28: "AAAA"
-            })
-            query_type = qtype_map.get(qtype_val, str(qtype_val)) if qtype_val is not None else None
+            query_type = (
+                config.DNS_QTYPE_MAP.get(qtype_val, str(qtype_val))
+                if qtype_val is not None
+                else None
+            )
 
             return query_name, query_type
         except (AttributeError, IndexError, UnicodeDecodeError):
