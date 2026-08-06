@@ -136,13 +136,27 @@ font-size: 11px;
 }
 .evidence-row {
 display: flex;
+/* flex-wrap + evidence-val'in min-width'i birlikte şunu sağlar: kısa
+değerler ("Sorgu Sayısı: 45") etiketle aynı satırda kalır, ancak
+etiket genişse değer kendi satırına inip kutunun tam genişliğini
+kullanır. Aksi halde "Örneklenen Sorgular:" gibi uzun bir etiket
+değere ~40px bırakıp satırı yüzlerce piksel uzatıyordu. */
+flex-wrap: wrap;
 justify-content: space-between;
 padding: 3px 0;
 border-bottom: 1px dashed var(--border);
 }
 .evidence-row:last-child { border-bottom: none; }
-.evidence-key { font-weight: 600; color: var(--muted); padding-right: 8px; }
-.evidence-val { overflow-wrap: break-word; word-break: normal; text-align: right; }
+/* flex-shrink: 0 -> etiket ("Sorgu Sayısı:") kırpılmasın, daima okunur kalsın. */
+.evidence-key { font-weight: 600; color: var(--muted); padding-right: 8px; flex-shrink: 0; }
+/* min-width: 0 zorunlu: flex öğelerinin varsayılan min-width'i "auto"dur,
+yani öğe içeriğinden daha dar olamaz. Bu yüzden DNS tünelleme/DGA
+bulgularındaki gibi boşluksuz uzun diziler (örneklenen sorgular, alan
+adları) satır sonuna gelince sarmalanmak yerine kutunun dışına taşıp
+kırpılıyordu -- yani KANIT sütunundaki delil sessizce okunamaz hale
+geliyordu. overflow-wrap: anywhere ise bu dizilerin herhangi bir
+noktadan bölünmesine izin verir. */
+.evidence-val { overflow-wrap: anywhere; text-align: right; flex: 1 1 auto; min-width: 55%; }
 .finding-title {
 font-weight: 600;
 color: var(--text);

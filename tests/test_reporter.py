@@ -12,6 +12,7 @@ Addresses deep production contract details:
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -485,6 +486,16 @@ class TestSnapshotAndChartExceptions:
                 f"Snapshot baseline missing at '{snapshot_file}'. "
                 "Commit an initial baseline file explicitly for CI/CD pipeline runs."
             )
+
+        # Şablon bilinçli olarak değiştirildiğinde baseline'ı elle düzenlemek
+        # hataya açık (419 satırlık diff). UPDATE_SNAPSHOT=1 ile yeniden üretilir:
+        #     UPDATE_SNAPSHOT=1 pytest tests/test_reporter.py -k snapshot
+        # Ardından üretilen diff MUTLAKA gözden geçirilmelidir: bu kaçış yolu
+        # snapshot testini "her zaman geçer" hale getirmek için değil, kasıtlı
+        # değişiklikleri işlemek içindir.
+        if os.getenv("UPDATE_SNAPSHOT") == "1":
+            snapshot_file.write_text(normalized_actual + "\n", encoding="utf-8")
+            pytest.skip(f"Snapshot yeniden üretildi: {snapshot_file}")
 
         expected_snapshot = snapshot_file.read_text(encoding="utf-8").strip()
         assert normalized_actual == expected_snapshot
