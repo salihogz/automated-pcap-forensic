@@ -49,5 +49,10 @@ graphify-out/
 .DS_Store
 Thumbs.db
 
-samples/*.pcap
-samples/*.pcapng
+# ==========================
+# Capture Samples
+# ==========================
+# Alt klasörleri de kapsamalı: capture'lar samples/clean/ ve
+# samples/malicious/ altında tutuluyor, yalnızca .gitkeep izleniyor.
+*.pcap
+*.pcapng
