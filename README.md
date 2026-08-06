@@ -108,7 +108,7 @@ Any other capture you drop under `samples/` is gitignored, so your own traffic n
 ## Current Features
 
 - PCAP / PCAPNG parsing
-- Streaming packet processing (memory-friendly on large captures)
+- Streaming packet parsing (`PcapReader`, never `rdpcap`) — but see [the memory limitation](#known-limitation-memory-on-very-large-captures)
 - General traffic statistics
 - Protocol statistics
 - Rule-based threat detection (8 rules, see below)
@@ -144,7 +144,7 @@ All thresholds and time windows are defined in `config.py`, which is the single 
 
 **Runtime:** Python 3.14 · Scapy · Requests · urllib3 · Matplotlib · Jinja2 · python-dotenv
 
-**Development:** Pytest · pytest-cov · BeautifulSoup4 (report DOM assertions) · Ruff
+**Development:** Pytest · pytest-cov · BeautifulSoup4 (report DOM assertions) · Ruff · pip-audit
 
 ---
 
@@ -161,12 +161,13 @@ Automated-PCAP-Forensic/
 ├── docs/                    # README screenshots
 ├── static/
 ├── logs/                    # analysis.log (gitignored)
-├── .github/workflows/       # CI (ruff + pytest on every push)
+├── .github/workflows/       # CI: ruff + pip-audit + pytest on every push
 ├── config.py                # thresholds, windows, paths, API config
 ├── main.py                  # CLI entry point / pipeline orchestration
 ├── pyproject.toml           # ruff / pytest / coverage configuration
 ├── requirements.txt         # runtime dependencies
 ├── requirements-dev.txt     # test & lint dependencies
+├── LICENSE
 └── README.md
 ```
 
@@ -218,14 +219,14 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 pytest                                              # full suite
 pytest tests/test_parser.py                         # single file
 pytest tests/test_parser.py::test_name -v           # single test
-pytest --cov=modules --cov=main --cov-report=html   # coverage → htmlcov/
+pytest --cov --cov-report=html                      # coverage → htmlcov/
 ruff check .                                        # lint
-ruff format .                                       # format
+pip-audit                                           # dependency vulnerability scan
 ```
 
-Ruff and pytest are configured in `pyproject.toml`; CI runs both on every push.
+Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 198 / 198 tests passing · **91%** total coverage (branch coverage enabled)
+**Current status:** 203 / 203 tests passing · **91%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
@@ -234,7 +235,7 @@ Ruff and pytest are configured in `pyproject.toml`; CI runs both on every push.
 | `main.py` | 96% |
 | `modules/models.py` | 94% |
 | `modules/statistics.py` | 93% |
-| `modules/parser.py` | 91% |
+| `modules/parser.py` | 92% |
 | `modules/reporter.py` | 88% |
 | `modules/threat_intel.py` | 82% |
 
@@ -271,8 +272,7 @@ The planned fix is chunked processing: every detection rule has a bounded time w
 This project follows:
 
 - SOLID Principles
-- Streaming Architecture
-- Memory Friendly Processing
+- Streaming Architecture (file is never read into memory whole)
 - Fail-Fast Error Handling
 - Type Hints
 - Dataclasses
