@@ -159,7 +159,6 @@ Automated-PCAP-Forensic/
 ├── samples/                 # captures (gitignored, except the synthetic demo)
 ├── scripts/                 # generate_sample_capture.py
 ├── docs/                    # README screenshots
-├── static/
 ├── logs/                    # analysis.log (gitignored)
 ├── .github/workflows/       # CI: ruff + pip-audit + pytest on every push
 ├── config.py                # thresholds, windows, paths, API config
@@ -226,7 +225,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 203 / 203 tests passing · **91%** total coverage (branch coverage enabled)
+**Current status:** 213 / 213 tests passing · **92%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
@@ -236,8 +235,8 @@ Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency v
 | `modules/models.py` | 94% |
 | `modules/statistics.py` | 93% |
 | `modules/parser.py` | 92% |
-| `modules/reporter.py` | 88% |
-| `modules/threat_intel.py` | 82% |
+| `modules/reporter.py` | 89% |
+| `modules/threat_intel.py` | 86% |
 
 `modules/threat_intel.py` is the lowest — its uncovered lines are mostly provider-specific HTTP error branches. The remaining gaps in `parser.py` are the module-level `ImportError` fallbacks for optional Scapy TLS/HTTP layers, which cannot be exercised without breaking the Scapy install.
 

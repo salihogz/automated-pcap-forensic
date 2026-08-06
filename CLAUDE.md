@@ -56,7 +56,7 @@ ThreatDetector.detect()     modules/threat_detector.py
 ThreatIntelService.enrich() modules/threat_intel.py   (parallel via ThreadPoolExecutor, public IPs only)
         │  dict[str, list[NormalizedIOCResult]]
         ▼
-Reporter.generate()         modules/reporter.py  →  reports/forensic_report.html
+Reporter.generate()         modules/reporter.py  →  reports/<clean|malicious>/<stem>_report.html
 ```
 
 Data contracts live in `modules/models.py` and are shared across every stage: `PacketInfo` (one parsed packet), `ThreatFinding` (one detection-engine result), `GeneralStatistics` (single-pass traffic summary). Both `PacketInfo` and `ThreatFinding` are `frozen=True, slots=True` dataclasses — treated as immutable for chain-of-custody/data-integrity reasons; never mutate them in place, construct a new instance instead. `GeneralStatistics` distribution fields are plain `dict[str, int]`, deliberately converted from `collections.Counter` before being stored — `dataclasses.asdict()` (used by every `to_dict()`) reconstructs a `Counter` incorrectly, so never assign a raw `Counter` to a dataclass field that will be serialized.
@@ -71,11 +71,12 @@ Data contracts live in `modules/models.py` and are shared across every stage: `P
 
 **`modules/reporter.py`** — Strict separation between view (`templates/report.html.j2`, Jinja2) and generation logic (this file). `ChartBuilder` turns statistics into base64-embedded matplotlib PNGs (`matplotlib.use("Agg")`, no GUI backend) plus `TableRow` data — it has no knowledge of Jinja2 or the filesystem, so it's unit-testable in isolation. `compute_risk_summary` is a pure function (`findings → RiskSummary`) driven by the severity-weight table (`_SEVERITY_WEIGHT`) and ordered threshold table (`_RISK_THRESHOLDS`); the exact threshold values are pinned to test expectations (see the comment in `reporter.py`) — treat them as an API contract, not a tunable. `risk_score` is an *unbounded* weighted sum (20 HIGH findings = 300) and the threshold table is calibrated against that raw value, so it must never be scaled or clamped; the template renders it as-is. `risk_score_normalized` (clamped to `_RISK_SCORE_DISPLAY_MAX`) exists purely so the progress bar's `width: N%` cannot overflow its container — use it for presentation only, never for comparisons or thresholds. `Reporter` itself only orchestrates: validates input, calls `ChartBuilder`/`compute_risk_summary`, renders the template, writes the file. The generated report is a single HTML file with no external references (charts inlined as base64) so it can be opened offline on an air-gapped forensic workstation.
 
-**`config.py`** — Single source of truth for all thresholds, time windows, directory paths (auto-created on import), API base URLs/env-var names, and lookup tables (`PROTOCOL_MAP`, `DNS_QTYPE_MAP`). Detection rules and report thresholds should read from here rather than hardcoding values inline.
+**`config.py`** — Single source of truth for all thresholds, time windows, directory paths (auto-created on import), API base URLs/env-var names, and lookup tables (`PROTOCOL_MAP`, `DNS_QTYPE_MAP`). Detection rules and report thresholds should read from here rather than hardcoding values inline. `TOOL_VERSION` also lives here and is the *only* place the version is written — `main.py`'s banner, `reporter._TOOL_VERSION` (which the report prints under "Araç Sürümü") and `pyproject.toml` must all agree; a test asserts this, because three copies had already drifted apart once.
 
 ## Testing conventions
 
-- 134+ tests across `tests/test_{parser,statistics,threat_detector,threat_intel,reporter}.py`, no `conftest.py` — fixtures are defined locally per test file.
+- 213 tests across `tests/test_{main,parser,statistics,threat_detector,threat_intel,reporter}.py`, no `conftest.py` — fixtures are defined locally per test file.
+- Tests must never write into the project tree. `Reporter.generate()` derives its output path from `config.REPORTS_DIR`, so any test that calls it has to monkeypatch that attribute (`test_reporter.py` does it via an autouse `isolated_reports_dir` fixture, `test_main.py` inline); without it every run left artifacts in the real `reports/clean/`.
 - `tests/snapshots/report_snapshot.html` is used for reporter snapshot-style assertions.
 - Samples for manual/integration testing live under `samples/clean/` and `samples/malicious/`; actual `.pcap`/`.pcapng` files are gitignored (only `.gitkeep` is tracked) — don't assume a sample file exists in a fresh checkout.
 
