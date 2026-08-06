@@ -59,9 +59,18 @@ def _is_public_ip(ip_str: str) -> bool:
     kurallarının (port scan vb.) sorumluluğundadır.
     """
     try:
-        return ipaddress.ip_address(ip_str).is_global
+        address = ipaddress.ip_address(ip_str)
     except ValueError:
         return False
+
+    # `is_global` multicast adresleri için True döner (224.0.0.251 mDNS,
+    # 239.255.255.250 SSDP, 224.0.0.252 LLMNR, ff02::fb ...). Bu adresler
+    # neredeyse her yerel ağ capture'ında bulunduğu için, ayrıca elenmezlerse
+    # her analizde onlarca anlamsız TI sorgusu yapılır -- VirusTotal'ın ücretsiz
+    # kotası günde 500 istek olduğundan bu, gerçek IP'ler için kalan kotayı
+    # tüketir. Multicast bir hedef host değil, bir dağıtım grubudur; dış TI
+    # sağlayıcılarında karşılığı yoktur.
+    return address.is_global and not address.is_multicast
 
 
 def print_banner() -> None:
