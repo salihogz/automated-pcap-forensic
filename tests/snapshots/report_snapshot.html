@@ -355,8 +355,62 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </div>
 </div>
 </section>
+<section id="layered_protocol_distribution">
+<h2>3. Katman Bazlı Protokol Dağılımı</h2>
+<p class="chart-desc">Ağ, taşıma ve uygulama katmanlarının her biri ayrı ayrı. Bir üstteki grafik her paketi yalnızca en üst katmanıyla saydığı için, örneğin TLS paketlerinin aynı zamanda TCP paketi olduğu orada görünmez. Uygulama katmanındaki &#34;Belirlenemedi&#34; satırı, protokolü tespit edilemeyen paketleri gösterir.</p>
+<div class="chart-container">
+<div class="chart-box">
+<img src="data:image/png;base64,SNAPSHOT_BASE64_PLACEHOLDER" alt="Katman Bazlı Protokol Dağılımı">
+</div>
+<div class="table-scroll">
+<table>
+<caption>Katman Bazlı Protokol Dağılımı - Özet Veri Tablosu</caption>
+<thead>
+<tr>
+<th scope="col">Parametre / Etiket</th>
+<th scope="col">Paket Sayısı</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ağ · IPv4</td>
+<td><strong>14,000 (93.3%)</strong></td>
+</tr>
+<tr>
+<td>Ağ · IPv6</td>
+<td><strong>1,000 (6.7%)</strong></td>
+</tr>
+<tr>
+<td>Taşıma · TCP</td>
+<td><strong>10,000 (66.7%)</strong></td>
+</tr>
+<tr>
+<td>Taşıma · UDP</td>
+<td><strong>4,000 (26.7%)</strong></td>
+</tr>
+<tr>
+<td>Taşıma · ICMP</td>
+<td><strong>1,000 (6.7%)</strong></td>
+</tr>
+<tr>
+<td>Uygulama · HTTPS</td>
+<td><strong>5,000 (50.0%)</strong></td>
+</tr>
+<tr>
+<td>Uygulama · HTTP</td>
+<td><strong>4,000 (40.0%)</strong></td>
+</tr>
+<tr>
+<td>Uygulama · DNS</td>
+<td><strong>1,000 (10.0%)</strong></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
 <section id="top_talkers">
-<h2>3. En Aktif Hostlar (Top Talkers)</h2>
+<h2>4. En Aktif Hostlar (Top Talkers)</h2>
 <p class="chart-desc">Ağ üzerinde en yüksek miktarda paket üreten/gönderen kaynak IP adresleri.</p>
 <div class="chart-container">
 <div class="chart-box">
@@ -386,7 +440,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </div>
 </section>
 <section id="top_bandwidth_hosts">
-<h2>4. En Yüksek Bant Genişliği Kullananlar</h2>
+<h2>5. En Yüksek Bant Genişliği Kullananlar</h2>
 <p class="chart-desc">Toplam veri aktarım hacmi açısından ağ bant genişliğini en çok tüketen hostlar.</p>
 <div class="chart-container">
 <div class="chart-box">
@@ -416,7 +470,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </div>
 </section>
 <section id="port_distribution">
-<h2>5. TCP Port Dağılımı</h2>
+<h2>6. TCP Port Dağılımı</h2>
 <p class="chart-desc">Trafikte en sık hedef alınan ve kullanılan ilk TCP portlarının paket yoğunluğu.</p>
 <div class="chart-container">
 <div class="chart-box">
@@ -446,7 +500,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </div>
 </section>
 <section id="udp_port_distribution">
-<h2>6. UDP Port Dağılımı</h2>
+<h2>7. UDP Port Dağılımı</h2>
 <p class="chart-desc">UDP üzerinde en sık görülen portlar (DNS, DHCP, NTP, QUIC/HTTP3 vb.) ve paket yoğunlukları.</p>
 <div class="chart-container">
 <div class="chart-box">
@@ -476,7 +530,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </div>
 </section>
 <section id="timeline">
-<h2>7. Zaman Çizelgesi (Paket Trafiği)</h2>
+<h2>8. Zaman Çizelgesi (Paket Trafiği)</h2>
 <p class="chart-desc">Analiz edilen zaman aralığı boyunca ağ trafiğinde meydana gelen anlık yoğunlaşma ve dalgalanmalar.</p>
 <div class="chart-container">
 <div class="chart-box">
@@ -508,7 +562,7 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 <!-- 3. Tehdit Bulguları -->
 <section>
 <h2>
-8. Tehdit Bulguları
+9. Tehdit Bulguları
 (1 desen)
 </h2>
 <table>
@@ -557,14 +611,14 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 </section>
 <!-- Threat Intelligence -->
 <section>
-<h2>9. Threat Intelligence Sonuçları</h2>
+<h2>10. Threat Intelligence Sonuçları</h2>
 <div class="empty-state">
 Threat Intelligence sonucu bulunmamaktadır.
 </div>
 </section>
 <!-- 4. Genel Risk Özeti -->
 <section>
-<h2>10. Genel Risk Özeti</h2>
+<h2>11. Genel Risk Özeti</h2>
 <div class="risk-banner high">
 <div class="risk-header">
 <div>

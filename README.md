@@ -22,6 +22,10 @@ python main.py -f samples/malicious/demo_capture.pcapng
 
 ![Report overview](docs/report-overview.png)
 
+**Protocol breakdown** — two complementary views. The first counts each packet once, by the highest layer identified; the second breaks down all three layers separately, so you can see that the TLS packets are also the TCP packets. The x-axis switches to a logarithmic scale when one protocol dominates — real traffic is routinely 98% HTTPS, and in DFIR the interesting thing is usually the *tail*, not the bulk. Bar labels always carry the true packet count:
+
+![Protocol distribution](docs/report-protocols.png)
+
 **Threat findings** — every finding carries the evidence it was derived from (counts, time window, first/last seen, sampled values), so a reviewer can check the engine's reasoning rather than trusting a verdict:
 
 ![Threat findings](docs/report-findings.png)
@@ -225,7 +229,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 213 / 213 tests passing · **92%** total coverage (branch coverage enabled)
+**Current status:** 224 / 224 tests passing · **92%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
@@ -235,7 +239,7 @@ Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency v
 | `modules/models.py` | 94% |
 | `modules/statistics.py` | 93% |
 | `modules/parser.py` | 92% |
-| `modules/reporter.py` | 89% |
+| `modules/reporter.py` | 90% |
 | `modules/threat_intel.py` | 86% |
 
 `modules/threat_intel.py` is the lowest — its uncovered lines are mostly provider-specific HTTP error branches. The remaining gaps in `parser.py` are the module-level `ImportError` fallbacks for optional Scapy TLS/HTTP layers, which cannot be exercised without breaking the Scapy install.

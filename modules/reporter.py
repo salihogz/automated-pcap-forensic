@@ -604,6 +604,132 @@ class ChartBuilder:
         ]
         return self._to_base64(fig), table_data
 
+    # Katman bazlı grafikte her katmanın rengi. Sıra aynı zamanda grafikteki
+    # yukarıdan aşağıya sırayı belirler (ağ -> taşıma -> uygulama, yani
+    # paketin katman yığınındaki sırayla).
+    _PROTOCOL_LAYERS: Final[tuple[tuple[str, str], ...]] = (
+        ("Ağ", "#0ea5e9"),
+        ("Taşıma", "#2563eb"),
+        ("Uygulama", "#7c3aed"),
+    )
+
+    # İstatistik motoru, ilgili katmanı olmayan paketleri "UNKNOWN" anahtarı
+    # altında sayar (ör. bir ICMP paketinin uygulama katmanı yoktur). Ham
+    # anahtar raporda anlamsız durduğu için sunumda çevrilir; bilgi ATILMAZ,
+    # çünkü "kaç paketin uygulama protokolü belirlenemedi" başlı başına bir
+    # bulgudur (tanınmayan/özel protokoller orada saklanır).
+    _UNKNOWN_DISPLAY: Final[str] = "Belirlenemedi"
+
+    def layered_protocol_chart(
+        self,
+        network: dict[str, int],
+        transport: dict[str, int],
+        application: dict[str, int],
+    ) -> tuple[str | None, list[TableRow]]:
+        """Ağ / taşıma / uygulama katmanlarının her birini ayrı ayrı gösterir.
+
+        Neden `protocol_distribution_chart`'a ek olarak gerekli: o grafik her
+        paketi TEK BİR kez, tespit edilebilen EN ÜST katmanın adıyla sayar.
+        Bu, "hangi uygulama trafiği var" sorusunu yanıtlar ama katmanları
+        birbirinin üstüne katlar: 233.136 TLS paketinin aynı zamanda 233.136
+        TCP paketi olduğu görünmez, çünkü o paketler TCP olarak hiç sayılmaz.
+        Analistin sorduğu "bu capture'da taşıma katmanında ne var" ya da
+        "kaç paketin uygulama protokolü belirlenemedi" soruları o grafikten
+        cevaplanamaz.
+
+        Üç dağılımın her biri toplam paket sayısına eşittir (eksik katmanlar
+        "UNKNOWN" altında sayılır), dolayısıyla katmanlar birbiriyle
+        karşılaştırılabilir.
+
+        Ölçek ve etiketleme `protocol_distribution_chart` ile aynı kuralları
+        izler (koşullu logaritmik eksen, bar ucunda gerçek sayı + yüzde), ki
+        iki grafik yan yana dururken aynı dilde konuşsunlar.
+        """
+        layers = (network, transport, application)
+        if not any(layers):
+            return None, []
+
+        # barh 0. indeksi en alta koyar; ağ katmanı en üstte görünsün diye
+        # katmanlar ters sırada gezilir.
+        bar_labels: list[str] = []
+        bar_values: list[int] = []
+        bar_colors: list[str] = []
+        table_data: list[TableRow] = []
+
+        for (layer_name, color), distribution in zip(
+            self._PROTOCOL_LAYERS, layers, strict=True
+        ):
+            if not distribution:
+                continue
+            layer_total = sum(distribution.values())
+            items = sorted(distribution.items(), key=lambda kv: kv[1], reverse=True)
+            for protocol, count in items:
+                display = self._UNKNOWN_DISPLAY if protocol == "UNKNOWN" else protocol
+                bar_labels.append(f"{layer_name} · {display}")
+                bar_values.append(count)
+                bar_colors.append(color)
+                share = count / layer_total if layer_total else 0.0
+                table_data.append(
+                    TableRow(label=f"{layer_name} · {display}", value=f"{count:,} ({share:.1%})")
+                )
+
+        if not bar_values:
+            return None, []
+
+        # Yükseklik bar sayısına göre büyür: sabit yükseklikte 10+ bar
+        # birbirine yapışıp okunmaz hale geliyordu.
+        height = max(self._FIGSIZE[1], 0.34 * len(bar_values) + 1.4)
+        fig, ax = plt.subplots(figsize=(self._FIGSIZE[0], height), dpi=self._DPI)
+
+        positions = range(len(bar_values))
+        bars = ax.barh(
+            list(positions),
+            list(reversed(bar_values)),
+            color=list(reversed(bar_colors)),
+        )
+        ax.set_yticks(list(positions))
+        ax.set_yticklabels(list(reversed(bar_labels)))
+        ax.set_title("Katman Bazlı Protokol Dağılımı")
+
+        drawn_values = list(reversed(bar_values))
+        smallest = min(v for v in drawn_values if v > 0)
+        if max(drawn_values) / smallest >= self._LOG_SCALE_RATIO_THRESHOLD:
+            ax.set_xscale("log")
+            ax.set_xlim(left=0.7, right=max(drawn_values) * 3)
+            ax.set_xlabel("Paket Sayısı (logaritmik ölçek)")
+        else:
+            ax.set_xlim(right=max(drawn_values) * 1.25)
+            ax.set_xlabel("Paket Sayısı")
+
+        for bar, value in zip(bars, drawn_values, strict=True):
+            ax.annotate(
+                f"{value:,}",
+                xy=(bar.get_width(), bar.get_y() + bar.get_height() / 2),
+                xytext=(4, 0),
+                textcoords="offset points",
+                va="center",
+                fontsize=8,
+            )
+
+        handles = [
+            plt.Rectangle((0, 0), 1, 1, color=color)
+            for (name, color), distribution in zip(self._PROTOCOL_LAYERS, layers, strict=True)
+            if distribution
+        ]
+        names = [
+            name
+            for (name, _color), distribution in zip(self._PROTOCOL_LAYERS, layers, strict=True)
+            if distribution
+        ]
+        # loc="best": barlar katman içinde azalan sırada olduğu için boş alan
+        # genellikle sağ altta kalır, ama tek satırlık bir katman varsa orası
+        # dolu olabilir. Sabit bir köşe seçmek yerine matplotlib'in çakışmayı
+        # en aza indiren yerleşimi kullanılıyor.
+        ax.legend(handles, names, title="Katman", loc="best", fontsize=8, frameon=False)
+
+        fig.tight_layout()
+        return self._to_base64(fig), table_data
+
     # Grafik çubuğu etiketlerinde hostname bu uzunluktan sonra kesilir;
     # aksi halde uzun bir domain adı (örn. bir CDN'in tam alt alan adı)
     # sol eksen genişliğini anlamsız şekilde büyütüp grafiği okunaksız
@@ -908,7 +1034,34 @@ class Reporter:
                 )
             )
 
-        # 2. Top Talkers
+        # 2. Katman Bazlı Protokol Dağılımı
+        # Protokol grafiğinin hemen ardında: o grafik her paketi yalnızca en
+        # üst katmanıyla sayar, bu grafik ise üç katmanın her birini ayrı ayrı
+        # gösterir (bkz. ChartBuilder.layered_protocol_chart).
+        img, table = self._chart_builder.layered_protocol_chart(
+            statistics.network_protocol_distribution,
+            statistics.transport_protocol_distribution,
+            statistics.application_protocol_distribution,
+        )
+        if img:
+            charts.append(
+                ChartSection(
+                    id="layered_protocol_distribution",
+                    title="Katman Bazlı Protokol Dağılımı",
+                    description=(
+                        "Ağ, taşıma ve uygulama katmanlarının her biri ayrı ayrı. Bir üstteki "
+                        "grafik her paketi yalnızca en üst katmanıyla saydığı için, örneğin "
+                        "TLS paketlerinin aynı zamanda TCP paketi olduğu orada görünmez. "
+                        "Uygulama katmanındaki \"Belirlenemedi\" satırı, protokolü tespit "
+                        "edilemeyen paketleri gösterir."
+                    ),
+                    image=img,
+                    table=table,
+                    val_header="Paket Sayısı",
+                )
+            )
+
+        # 3. Top Talkers
         img, table = self._chart_builder.top_hosts_chart(
             statistics.top_source_ips,
             "En Aktif Hostlar (Top Talkers)",

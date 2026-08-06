@@ -16,6 +16,7 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import matplotlib
@@ -331,12 +332,13 @@ class TestRiskSummaryAndChartBuilderUnits:
         assert r.compute_risk_summary([]).risk_score_normalized == 0
 
     def test_build_charts_list_exact_count_and_titles(self, populated_statistics: GeneralStatistics):
-        """Directly tests Reporter._build_charts_list to verify exact count (6) and keywords in titles."""
+        """Directly tests Reporter._build_charts_list to verify exact count (7) and keywords in titles."""
         reporter = r.Reporter()
         charts = reporter._build_charts_list(populated_statistics)
 
         assert isinstance(charts, list)
-        assert len(charts) == 6
+        assert len(charts) == 7
+        assert "Katman Bazlı Protokol Dağılımı" in [c.title for c in charts]
 
         # Extract chart titles assuming dataclass/object or dict representation
         titles = [getattr(c, "title", c.get("title") if isinstance(c, dict) else None) for c in charts]
@@ -906,3 +908,88 @@ class TestProtocolDistributionChart:
         img, table = r.ChartBuilder().protocol_distribution_chart({})
         assert img is None
         assert table == []
+
+
+class TestLayeredProtocolChart:
+    """Katman bazlı protokol grafiği (ağ / taşıma / uygulama)."""
+
+    # Gerçek bir capture'dan (236.843 paket) alınmış katman dağılımları.
+    REAL_NETWORK: ClassVar[dict[str, int]] = {"IPv4": 236843}
+    REAL_TRANSPORT: ClassVar[dict[str, int]] = {"TCP": 233136, "UDP": 3707}
+    REAL_APPLICATION: ClassVar[dict[str, int]] = {
+        "TLS": 233136, "QUIC": 3353, "DNS": 328, "NTP": 26,
+    }
+
+    def test_every_layer_and_protocol_appears_once(self):
+        """Üç katmanın her protokolü, katman adıyla etiketli tek satır üretmeli."""
+        img, table = r.ChartBuilder().layered_protocol_chart(
+            self.REAL_NETWORK, self.REAL_TRANSPORT, self.REAL_APPLICATION
+        )
+
+        assert isinstance(img, str) and img
+        labels = [row.label for row in table]
+        assert labels == [
+            "Ağ · IPv4",
+            "Taşıma · TCP",
+            "Taşıma · UDP",
+            "Uygulama · TLS",
+            "Uygulama · QUIC",
+            "Uygulama · DNS",
+            "Uygulama · NTP",
+        ]
+        # Katmanlar birbirinden bağımsız yüzdelenmeli (her katman kendi içinde %100).
+        assert table[0].value == "236,843 (100.0%)"
+        assert table[1].value == "233,136 (98.4%)"
+        assert table[-1].value.startswith("26 (")
+
+    def test_layers_are_independent_of_top_layer_collapsing(self):
+        """Katman grafiği, birleşik grafiğin gizlediği bilgiyi göstermeli.
+
+        protocol_distribution_chart her paketi yalnızca EN ÜST katmanıyla
+        sayar; 233.136 TLS paketinin aynı zamanda TCP paketi olduğu orada
+        görünmez. Bu grafik ikisini de ayrı ayrı göstermek zorundadır.
+        """
+        _img, table = r.ChartBuilder().layered_protocol_chart(
+            self.REAL_NETWORK, self.REAL_TRANSPORT, self.REAL_APPLICATION
+        )
+        values = {row.label: row.value for row in table}
+
+        assert values["Taşıma · TCP"].startswith("233,136")
+        assert values["Uygulama · TLS"].startswith("233,136")
+
+    def test_unknown_key_is_displayed_readably_not_dropped(self):
+        """"UNKNOWN" satırı okunur bir etikete çevrilmeli ama ASLA atılmamalı.
+
+        "Uygulama protokolü belirlenemeyen paket sayısı" başlı başına bir
+        bulgudur: tanınmayan veya özel protokoller orada saklanır.
+        """
+        _img, table = r.ChartBuilder().layered_protocol_chart(
+            {"IPv4": 364},
+            {"ICMP": 150, "UDP": 137, "TCP": 77},
+            {"UNKNOWN": 166, "DNS": 126, "TLS": 72},
+        )
+        labels = [row.label for row in table]
+
+        assert "Uygulama · Belirlenemedi" in labels
+        assert "Uygulama · UNKNOWN" not in labels
+        row = next(r_ for r_ in table if r_.label == "Uygulama · Belirlenemedi")
+        assert row.value.startswith("166 (")
+
+    def test_missing_layer_is_skipped_not_crashed(self):
+        """Bir katman boşsa grafik yine üretilmeli, o katman atlanmalı."""
+        img, table = r.ChartBuilder().layered_protocol_chart(
+            {"IPv4": 10}, {}, {"DNS": 10}
+        )
+        assert isinstance(img, str) and img
+        assert [row.label for row in table] == ["Ağ · IPv4", "Uygulama · DNS"]
+
+    def test_all_layers_empty_returns_no_chart(self):
+        assert r.ChartBuilder().layered_protocol_chart({}, {}, {}) == (None, [])
+
+    def test_chart_section_is_wired_into_report(self, populated_statistics: GeneralStatistics):
+        """Grafik, protokol dağılımının hemen ardında rapora girmeli."""
+        charts = r.Reporter()._build_charts_list(populated_statistics)
+        ids = [c.id for c in charts]
+
+        assert ids.index("layered_protocol_distribution") == ids.index("protocol_distribution") + 1
+        assert len(charts) == 7

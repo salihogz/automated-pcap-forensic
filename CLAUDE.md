@@ -20,12 +20,14 @@ python main.py -v                     # DEBUG-level logging
 pytest                                 # full suite
 pytest tests/test_parser.py            # single file
 pytest tests/test_parser.py::test_name -v   # single test
-pytest --cov=modules --cov=main --cov-report=html   # coverage (writes htmlcov/)
+pytest --cov --cov-report=html         # coverage (writes htmlcov/)
 
-# Lint
+# Lint + dependency vulnerability scan (both run in CI)
 ruff check .
-ruff format .
+pip-audit
 ```
+
+Coverage sources are configured in `pyproject.toml` (`source = ["."]` plus omits). Do **not** revert to `--cov=modules --cov=main`: `main` does not resolve as a module name there, so `main.py` silently dropped out of the report entirely — an uncovered file that simply isn't listed reads as if it were covered.
 
 `pyproject.toml` configures ruff, pytest and coverage (it is **not** a packaging manifest — dependencies live in `requirements.txt` / `requirements-dev.txt`). Two ruff decisions there are deliberate and should not be "fixed": `RUF001/002/003` (ambiguous-unicode) are ignored because the Turkish docstrings/comments trigger 1600+ false positives, and `UP042` is ignored because switching `class X(str, Enum)` to `StrEnum` would change what `str(member)` returns — the report template relies on the current behaviour via `finding.severity|string`. `ruff format` has **not** been applied to the codebase, so CI runs `ruff check` only. No Docker support yet (listed as planned in README).
 
@@ -75,7 +77,7 @@ Data contracts live in `modules/models.py` and are shared across every stage: `P
 
 ## Testing conventions
 
-- 213 tests across `tests/test_{main,parser,statistics,threat_detector,threat_intel,reporter}.py`, no `conftest.py` — fixtures are defined locally per test file.
+- 224 tests across `tests/test_{main,parser,statistics,threat_detector,threat_intel,reporter}.py`, no `conftest.py` — fixtures are defined locally per test file.
 - Tests must never write into the project tree. `Reporter.generate()` derives its output path from `config.REPORTS_DIR`, so any test that calls it has to monkeypatch that attribute (`test_reporter.py` does it via an autouse `isolated_reports_dir` fixture, `test_main.py` inline); without it every run left artifacts in the real `reports/clean/`.
 - `tests/snapshots/report_snapshot.html` is used for reporter snapshot-style assertions.
 - Samples for manual/integration testing live under `samples/clean/` and `samples/malicious/`; actual `.pcap`/`.pcapng` files are gitignored (only `.gitkeep` is tracked) — don't assume a sample file exists in a fresh checkout.
