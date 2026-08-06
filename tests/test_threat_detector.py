@@ -563,6 +563,90 @@ def test_exfiltration_ignores_slow_benign_transfer_over_long_capture():
     assert len(exfil_findings) == 0
 
 
+@pytest.mark.parametrize(
+    "multicast_dst",
+    [
+        "239.255.255.250",  # SSDP / UPnP
+        "224.0.0.251",      # mDNS
+        "224.0.0.252",      # LLMNR
+    ],
+)
+def test_exfiltration_ignores_multicast_destinations(multicast_dst):
+    """Regresyon: multicast hedefler "dış IP" sayılmamalı.
+
+    `ipaddress.is_global` multicast adresleri için True döner. Bu tek başına
+    kullanıldığında, yerel ağdaki yüksek hacimli yayın trafiği (SSDP duyuruları,
+    çok yayınlı video) SEC-EXFIL-001 tarafından CRITICAL "veri sızdırma" olarak
+    raporlanıyordu — oysa bu trafik ağdan hiç çıkmaz.
+    """
+    packets = [
+        PacketInfo(
+            id=i,
+            epoch_time=1000.0 + i,
+            src_ip="192.168.1.50",
+            dst_ip=multicast_dst,
+            is_ipv6=False,
+            network_protocol="IPv4",
+            transport_protocol="UDP",
+            application_protocol=None,
+            length=10 * 1024 * 1024,  # 10 MB -> toplam 60 MB, eşiğin (50 MB) üstünde
+            src_port=54321,
+            dst_port=1900,
+            tcp_flags=None,
+        )
+        for i in range(6)
+    ]
+    findings = ThreatDetector().detect(packets)
+
+    assert [f for f in findings if f.rule_id == "SEC-EXFIL-001"] == []
+
+
+def test_is_egress_traffic_multicast_and_public():
+    """_is_egress_traffic: gerçek public hedef kabul, multicast ret."""
+    assert ThreatDetector._is_egress_traffic("192.168.1.50", "93.184.216.34") is True
+    assert ThreatDetector._is_egress_traffic("192.168.1.50", "239.255.255.250") is False
+    assert ThreatDetector._is_egress_traffic("192.168.1.50", "ff02::fb") is False
+    # Hedef zaten iç ağdaysa egress değildir.
+    assert ThreatDetector._is_egress_traffic("192.168.1.50", "192.168.1.60") is False
+    # Ayrıştırılamayan adres sessizce False döner (kural çökmemeli).
+    assert ThreatDetector._is_egress_traffic("gecersiz", "93.184.216.34") is False
+
+
+def test_long_domain_and_dga_share_query_domain_map():
+    """detect() alan adı haritasını bir kez kurup iki kurala da vermeli.
+
+    Harita paylaşımı bir optimizasyon; ancak kuralların TEK BAŞINA da
+    çalışabilmesi (harita verilmezse kendisi kurar) korunmalıdır, aksi halde
+    kural tek başına test edilemez hale gelir.
+    """
+    packet = PacketInfo(
+        id=1,
+        epoch_time=1700000000.0,
+        src_ip="10.0.0.5",
+        dst_ip="10.0.0.1",
+        is_ipv6=False,
+        network_protocol="IPv4",
+        transport_protocol="UDP",
+        application_protocol="DNS",
+        length=90,
+        src_port=53000,
+        dst_port=53,
+        tcp_flags=None,
+        dns_query_name="a" * 60 + ".example.com",
+        dns_query_type="TXT",
+    )
+    detector = ThreatDetector()
+
+    standalone = detector._detect_long_domains([packet])
+    shared = detector._detect_long_domains(
+        [packet], detector._collect_unique_query_domains([packet])
+    )
+
+    assert len(standalone) == 1
+    assert [f.rule_id for f in standalone] == [f.rule_id for f in shared]
+    assert standalone[0].evidence == shared[0].evidence
+
+
 # --- _is_valid_transport_packet Parametrik Testleri ---
 
 @pytest.mark.parametrize(

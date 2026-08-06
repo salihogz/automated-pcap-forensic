@@ -27,21 +27,36 @@ class ThreatDetector:
         """Verilen paket akışı üzerinde tüm tehdit tespit kurallarını çalıştırır."""
         findings: list[ThreatFinding] = []
 
-        # Jeneratör/iteratör tipindeki girdileri tek seferlik listeye dönüştürür
-        packet_list = list(packets)
+        # Jeneratör/iteratör tipindeki girdiler listeye alınır: kurallar paket
+        # listesini birden çok kez dolaşır, tek seferlik bir iteratör ilk
+        # kuraldan sonra tükenmiş olurdu.
+        #
+        # Girdi ZATEN bir liste ise kopyalanmaz. `list(...)` içeriği değil
+        # yalnızca işaretçileri kopyalar, ama bu bile paket başına 8 bayttır:
+        # main.py'nin verdiği 10 milyon paketlik listede sırf bu kopya 80 MB
+        # eder ve o sırada iki liste birden bellekte durur. PacketInfo frozen
+        # olduğundan paylaşılan liste üzerinde çalışmak güvenlidir.
+        packet_list = packets if isinstance(packets, list) else list(packets)
         if not packet_list:
             logger.info("Tehdit tespiti için paket bulunamadı (boş liste).")
             return findings
 
         logger.info("Tehdit tespit motoru başlatılıyor. Paket sayısı: %d", len(packet_list))
 
+        # Long-domain ve DGA kurallarının ikisi de "sorgulanan alan adı ->
+        # paketler" haritasına ihtiyaç duyar. Harita burada BİR KEZ kurulup
+        # ikisine de verilir; daha önce her kural haritayı kendisi kuruyor,
+        # yani paket listesi üzerinde iki tam geçiş yapılıp aynı içerikte iki
+        # sözlük birden bellekte tutuluyordu.
+        query_domains = self._collect_unique_query_domains(packet_list)
+
         findings.extend(self._detect_port_scan(packet_list))
         findings.extend(self._detect_syn_scan(packet_list))
         findings.extend(self._detect_icmp_flood(packet_list))
         findings.extend(self._detect_failed_tcp_connections(packet_list))
         findings.extend(self._detect_dns_tunneling(packet_list))
-        findings.extend(self._detect_long_domains(packet_list))
-        findings.extend(self._detect_dga_domains(packet_list))
+        findings.extend(self._detect_long_domains(packet_list, query_domains))
+        findings.extend(self._detect_dga_domains(packet_list, query_domains))
         findings.extend(self._detect_exfiltration(packet_list))
 
         logger.info("Tehdit tespiti tamamlandı. Toplam %d bulgu üretildi.", len(findings))
@@ -90,13 +105,25 @@ class ThreatDetector:
 
     @staticmethod
     def _is_egress_traffic(src_ip: str, dst_ip: str) -> bool:
-        """Trafiğin iç ağdan genel (public) ağa doğru olup olmadığını denetler."""
+        """Trafiğin iç ağdan genel (public) ağa doğru olup olmadığını denetler.
+
+        `is_global` MULTICAST adresleri için de True döner (239.255.255.250
+        SSDP, 224.0.0.251 mDNS, ff02::fb ...). Multicast bir dış hedef host
+        DEĞİL, yerel ağın kendi içindeki bir dağıtım grubudur; oraya giden
+        trafik ağdan hiç çıkmaz. Bu adresler ayrıca elenmezse, yüksek hacimli
+        yerel yayın trafiği (ör. bir medya sunucusunun SSDP/DLNA duyuruları
+        veya çok yayınlı video akışı) SEC-EXFIL-001 tarafından "dış IP'ye veri
+        sızdırma" olarak CRITICAL severity ile raporlanır — raporun en ağır
+        bulgusu tamamen yanlış-pozitif olur. Aynı eleme main.py'de dış Threat
+        Intel sorguları için de yapılır (bkz. main._is_public_ip).
+        """
         try:
             src_obj = ipaddress.ip_address(src_ip)
             dst_obj = ipaddress.ip_address(dst_ip)
-            return (not src_obj.is_global) and dst_obj.is_global
         except ValueError:
             return False
+
+        return (not src_obj.is_global) and dst_obj.is_global and not dst_obj.is_multicast
 
     @staticmethod
     def _shannon_entropy(text: str) -> float:
@@ -141,6 +168,26 @@ class ThreatDetector:
         if len(parts) >= 3 and last_two in config.DNS_TUNNEL_MULTI_LABEL_SUFFIXES:
             return ".".join(parts[-3:])
         return last_two
+
+    @staticmethod
+    def _earliest_packet(packets: list[PacketInfo]) -> PacketInfo:
+        """Listedeki en erken paketi döndürür; BOZUK zaman damgalarını atlar.
+
+        Parser, okunamayan bir zaman damgasını `epoch_time=0.0` sentinel'i ile
+        işaretleyip paketi listede tutar (bkz. parser._parse_single_packet).
+        Düz bir `min(..., key=epoch_time)` bu sentinel'i her zaman "en erken"
+        seçer; sonuçta bulgunun `timestamp` alanı ve kanıttaki "İlk Görülme"
+        değeri raporda 1970-01-01 olarak görünür — capture'ın gerçek zamanıyla
+        hiç ilgisi olmayan bir tarih. statistics.py aynı sentinel'i zaman bazlı
+        hesaplardan zaten dışlıyor; bu yardımcı, aynı korumayı DNS tabanlı
+        kurallara (long-domain, DGA) taşır.
+
+        Hiç geçerli zamanlı paket yoksa elde olan en iyi veriye düşülür:
+        bulgu üretilmemesindense 0.0 zamanlı bulgu üretmek yeğdir (kanıt kaybı
+        olmaz, kural sessizce kaybolmaz).
+        """
+        valid = [p for p in packets if p.epoch_time > 0]
+        return min(valid or packets, key=lambda p: p.epoch_time)
 
     @staticmethod
     def _collect_unique_query_domains(packets: list[PacketInfo]) -> dict[str, list[PacketInfo]]:
@@ -252,8 +299,14 @@ class ThreatDetector:
                 _add(right)
                 right += 1
 
-            distinct_ports = set(port_counts.keys())
-            if len(distinct_ports) >= port_threshold:
+            # `len(port_counts)` doğrudan okunur. Önceki sürüm her `left`
+            # adımında `set(port_counts.keys())` ile YENİ bir küme kuruyordu;
+            # bu, sadece sayıya bakmak için pencere başına O(k) kopyalama
+            # demekti ve döngünün tamamını O(N*k)'ya çıkarıyordu (kuralın
+            # tetiklenmediği yoğun trafik en kötü durum). Kümeyi yalnızca
+            # gerçekten bir bulgu üretilirken -yani nadiren- kuruyoruz.
+            if len(port_counts) >= port_threshold:
+                distinct_ports = set(port_counts)
                 window_packets = sorted_pkts[left:right]
                 first_seen = window_packets[0].epoch_time
                 last_seen = window_packets[-1].epoch_time
@@ -573,17 +626,30 @@ class ThreatDetector:
         logger.info("DNS Tunneling kuralı tamamlandı. %d bulgu üretildi.", len(findings))
         return findings
 
-    def _detect_long_domains(self, packets: list[PacketInfo]) -> list[ThreatFinding]:
-        """Aşırı uzun alan adı (Long Domain) sorgularını tespit eder."""
+    def _detect_long_domains(
+        self,
+        packets: list[PacketInfo],
+        query_domains: dict[str, list[PacketInfo]] | None = None,
+    ) -> list[ThreatFinding]:
+        """Aşırı uzun alan adı (Long Domain) sorgularını tespit eder.
+
+        `query_domains` verilirse (bkz. `detect()`), alan adı haritası yeniden
+        kurulmaz; DGA kuralıyla paylaşılan tek bir harita kullanılır.
+        Verilmezse kural tek başına da çalışabilir.
+        """
         logger.info("Long Domain kuralı çalıştırılıyor...")
         findings: list[ThreatFinding] = []
 
-        domains_map = self._collect_unique_query_domains(packets)
+        domains_map = (
+            query_domains
+            if query_domains is not None
+            else self._collect_unique_query_domains(packets)
+        )
         long_domains_evidence: list[dict[str, float | str | int]] = []
 
         for domain, domain_pkts in domains_map.items():
             if len(domain) > config.LONG_DOMAIN_LENGTH:
-                first_pkt = min(domain_pkts, key=lambda p: p.epoch_time)
+                first_pkt = self._earliest_packet(domain_pkts)
                 long_domains_evidence.append({
                     "domain": domain,
                     "length": len(domain),
@@ -614,12 +680,24 @@ class ThreatDetector:
         logger.info("Long Domain kuralı tamamlandı. %d bulgu üretildi.", len(findings))
         return findings
 
-    def _detect_dga_domains(self, packets: list[PacketInfo]) -> list[ThreatFinding]:
-        """Yüksek entropili DGA (Domain Generation Algorithm) alan adlarını tespit eder."""
+    def _detect_dga_domains(
+        self,
+        packets: list[PacketInfo],
+        query_domains: dict[str, list[PacketInfo]] | None = None,
+    ) -> list[ThreatFinding]:
+        """Yüksek entropili DGA (Domain Generation Algorithm) alan adlarını tespit eder.
+
+        `query_domains` için bkz. `_detect_long_domains` — iki kural aynı
+        alan adı haritasını paylaşır.
+        """
         logger.info("DGA Detection kuralı çalıştırılıyor...")
         findings: list[ThreatFinding] = []
 
-        domains_map = self._collect_unique_query_domains(packets)
+        domains_map = (
+            query_domains
+            if query_domains is not None
+            else self._collect_unique_query_domains(packets)
+        )
         dga_evidence: list[dict[str, float | str]] = []
 
         for domain, domain_pkts in domains_map.items():
@@ -629,7 +707,7 @@ class ThreatDetector:
             if len(label) >= config.DGA_MIN_LABEL_LENGTH:
                 entropy = self._shannon_entropy(label)
                 if entropy >= config.DGA_ENTROPY_THRESHOLD:
-                    first_pkt = min(domain_pkts, key=lambda p: p.epoch_time)
+                    first_pkt = self._earliest_packet(domain_pkts)
                     dga_evidence.append({
                         "domain": domain,
                         "label": label,
