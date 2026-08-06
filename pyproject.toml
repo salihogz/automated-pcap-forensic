@@ -73,7 +73,16 @@ filterwarnings = [
 # Coverage
 # ----------------------------------------------------------------------
 [tool.coverage.run]
-source = ["modules", "main", "config"]
+# source = ["main"] bir modül adı olarak çözülmediği için main.py rapora hiç
+# girmiyordu (kapsanmayan bir dosyanın raporda görünmemesi, kapsanıyormuş
+# yanılgısı yaratır). Kök dizini tarayıp gereksizleri dışlamak daha güvenilir.
+source = ["."]
+omit = [
+    "venv/*",
+    ".venv/*",
+    "tests/*",
+    "scripts/*",
+]
 branch = true
 
 [tool.coverage.report]
