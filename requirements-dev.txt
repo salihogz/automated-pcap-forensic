@@ -1,0 +1,7 @@
+# Development / test dependencies.
+# Install on top of the runtime set:  pip install -r requirements.txt -r requirements-dev.txt
+
+pytest==9.1.1           # Test runner
+pytest-cov==7.1.0       # Coverage plugin (pytest --cov=modules --cov=main)
+beautifulsoup4==4.15.0  # DOM assertions on the generated HTML report (tests only)
+ruff==0.16.0            # Linter + formatter

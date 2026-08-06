@@ -1,31 +1,11 @@
-appdirs==1.4.4
-certifi==2026.6.17
-cffi==2.1.0
-charset-normalizer==3.4.9
-contourpy==1.3.3
-cryptography==49.0.0
-cycler==0.12.1
-fonttools==4.63.0
-idna==3.18
-Jinja2==3.1.6
-kiwisolver==1.5.0
-lxml==6.1.1
-MarkupSafe==3.0.3
-matplotlib==3.11.1
-numpy==2.5.1
-packaging==26.2
-pandas==3.0.3
-pillow==12.3.0
-pycparser==3.0
-pyparsing==3.3.2
-python-dateutil==2.9.0.post0
-python-dotenv==1.2.2
-requests==2.34.2
-scapy==2.7.0
-six==1.17.0
-termcolor==3.3.0
-urllib3==2.7.0
-beautifulsoup4
-pytest
-pytest-cov
-ruff
+# Runtime dependencies (direct imports only).
+# Transitive dependencies (numpy, pillow, certifi, cryptography, ...) are
+# resolved by pip and deliberately not pinned here.
+# Development/test dependencies live in requirements-dev.txt.
+
+scapy==2.7.0            # PcapReader streaming parser, packet layer access
+requests==2.34.2        # Threat-intel provider HTTP calls
+urllib3==2.7.0          # Retry policy for the shared requests.Session
+matplotlib==3.11.1      # Report charts (Agg backend, no GUI)
+Jinja2==3.1.6           # HTML report template rendering
+python-dotenv==1.2.2    # Loads API keys from .env
