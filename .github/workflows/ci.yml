@@ -45,6 +45,14 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      # Bağımlılıklarda bilinen zafiyet taraması. Tek tek CVE'leri elle
+      # sabitlemek yerine tarama otomatikleştirildi: yeni bir zafiyet
+      # yayımlandığında bir sonraki push'ta görünür olur.
+      # Transitif bağımlılıklar da dahil olsun diye kurulu ortamın tamamı
+      # taranıyor (-r requirements.txt yalnızca doğrudan olanları görürdü).
+      - name: Security audit (pip-audit)
+        run: pip-audit --strict
+
       - name: Test (pytest + coverage)
         run: pytest --cov --cov-report=term-missing --cov-report=xml
 

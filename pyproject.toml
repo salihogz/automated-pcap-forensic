@@ -67,6 +67,9 @@ filterwarnings = [
     # Scapy'nin kendi DNS alan adı uyarısı; bizim kodumuzla ilgisi yok ve
     # test çıktısını gürültüye boğuyor.
     "ignore:The DNS fields.*:DeprecationWarning",
+    # Scapy'nin TLS katmanı cryptography'nin FFDH API'sini kullanıyor; uyarı
+    # scapy'den geliyor, bizim kodumuzdan değil.
+    "ignore:Diffie-Hellman over finite fields.*:UserWarning",
 ]
 
 # ----------------------------------------------------------------------
