@@ -81,10 +81,22 @@ _SEVERITY_WEIGHT: Final[dict[ThreatSeverity, int]] = {
 
 # (eşik_skoru, etiket, css_sınıfı) üçlüleri artan sırada. En yüksek eşiğe ulaşan
 # etiket kazanır (bkz. compute_risk_summary).
-# Test beklentilerine göre (0 -> TEMİZ, 4 -> DÜŞÜK, 5 -> ORTA, 15 -> YÜKSEK, 30 -> KRİTİK) ayarlanmıştır.
+#
+# Sabitlenmiş sınır değerleri (testlerle korunuyor, API sözleşmesi sayılır):
+# 0 -> TEMİZ, 4 -> DÜŞÜK, 5 -> ORTA, 14 -> ORTA, 15 -> YÜKSEK, 29 -> YÜKSEK,
+# 30 -> KRİTİK.
+#
+# DÜŞÜK eşiği 4 DEĞİL 1'dir. Daha önce 4'tü ve bu, adli bir araçta kabul
+# edilemez bir yanlış sonuç üretiyordu: 1, 2 veya 3 puanlık skorlar (yani
+# 1-3 adet LOW bulgu) hiçbir eşiği karşılamadığı için "TEMİZ" kovasına
+# düşüyordu. Rapor, bulgu tablosunda gerçek bulgular listelerken en üstte
+# "Risk Seviyesi: TEMİZ" yazıyordu. Bir DFIR raporunda hatanın bu yönü
+# (var olan bulguyu yok saymak) en tehlikeli olanıdır. 1'e çekmek, yukarıda
+# sabitlenmiş sınırların hiçbirini değiştirmez -- 4 hâlâ DÜŞÜK, 5 hâlâ ORTA --
+# yalnızca 1-3 aralığındaki boşluğu kapatır.
 _RISK_THRESHOLDS: Final[tuple[tuple[int, str, str], ...]] = (
     (0, "TEMİZ", "clean"),
-    (4, "DÜŞÜK", "low"),
+    (1, "DÜŞÜK", "low"),
     (5, "ORTA", "medium"),
     (15, "YÜKSEK", "high"),
     (30, "KRİTİK", "critical"),
@@ -92,14 +104,67 @@ _RISK_THRESHOLDS: Final[tuple[tuple[int, str, str], ...]] = (
 
 # `risk_score` SINIRSIZ bir ağırlıklı toplamdır (7 HIGH = 105, 20 HIGH = 300);
 # eşik tablosu bu ham değere göre kalibre edildiğinden ham değer asla
-# ölçeklenmemeli veya kırpılmamalıdır. Ancak rapor bu skoru "X / 100" olarak
-# ve genişliği `width: {{ skor }}%` olan bir ilerleme çubuğuyla gösteriyordu:
-# olaylı bir capture'da "300 / 100" gibi anlamsız bir değer basılıyor ve
-# çubuk kapsayıcısını taşırıyordu. Bu yüzden SUNUM için ayrı, 0-100 aralığına
-# kırpılmış bir alan (`risk_score_normalized`) üretilir; ham `risk_score`
-# ise metinde olduğu gibi, kırpılmadan gösterilmeye devam eder (kanıt kaybı
-# olmaz).
+# ölçeklenmemeli veya kırpılmamalıdır. İlerleme çubuğunun genişliği ise
+# `width: N%` olduğundan 0-100 aralığında bir değere ihtiyaç duyar.
 _RISK_SCORE_DISPLAY_MAX: Final[int] = 100
+
+# Çubuk, KRİTİK bandında eşiğin bu KATINA ulaşınca tamamen dolar
+# (30 * 4 = 120 puan). Sınırsız bir skoru sonlu bir çubuğa sığdırmak için bir
+# doyma noktası gerekir; 4 kat, "birkaç kritik bulgu" ile "capture baştan sona
+# saldırı" durumlarını ayırt edecek kadar geniştir.
+_CRITICAL_BAR_SATURATION_FACTOR: Final[int] = 4
+
+
+def _compute_risk_bar_position(risk_score: int) -> int:
+    """Ham risk skorunu ilerleme çubuğunun doluluk yüzdesine çevirir.
+
+    NEDEN DÜZ `min(skor, 100)` DEĞİL: Çubuk eskiden skoru doğrudan yüzde
+    olarak kullanıyordu ve bu, çubuğun RİSK SEVİYESİ ETİKETİYLE ÇELİŞMESİNE
+    yol açıyordu. Tek bir CRITICAL bulgu 30 puan eder; rapor "Risk Seviyesi:
+    KRİTİK" yazarken hemen altındaki çubuk %30 dolu -- yani gözle "düşük
+    risk" -- görünüyordu. Ters uçta ise 20 HIGH (300 puan) ile 100 CRITICAL
+    (3000 puan) çubukta ayırt edilemiyordu, ikisi de %100'e kırpılıyordu.
+    Çubuk, adı "yüzde" olan ama hiçbir tanımlı büyüklüğü ölçmeyen bir
+    göstergeydi.
+
+    Bunun yerine çubuk artık SEVİYE BANDINI gösterir: TEMİZ dışındaki dört
+    bandın (DÜŞÜK/ORTA/YÜKSEK/KRİTİK) her biri çubuğun %25'ini kaplar, band
+    içinde skorla orantılı olarak ilerlenir. Böylece KRİTİK daima >= %75
+    dolu görünür ve çubuk ile etiket asla çelişmez. KRİTİK bandı sınırsız
+    olduğu için eşiğin `_CRITICAL_BAR_SATURATION_FACTOR` katında doyar.
+
+    Ham `risk_score` bu dönüşümden ETKİLENMEZ; raporda olduğu gibi, sayı
+    olarak gösterilmeye devam eder (kanıt kaybı olmaz).
+    """
+    if risk_score <= 0:
+        return 0
+
+    thresholds = [threshold for threshold, _label, _css in _RISK_THRESHOLDS]
+    band_count = len(thresholds) - 1  # TEMİZ bandı çubukta yer kaplamaz
+    band_width = _RISK_SCORE_DISPLAY_MAX / band_count
+
+    # Skorun içine düştüğü bandı bul (1..band_count).
+    band_index = 1
+    for i in range(1, len(thresholds)):
+        if risk_score >= thresholds[i]:
+            band_index = i
+
+    band_start = thresholds[band_index]
+    if band_index < len(thresholds) - 1:
+        band_end = thresholds[band_index + 1]
+    else:
+        # En üst (KRİTİK) band sınırsız; yapay bir doyma noktası kullanılır.
+        band_end = band_start * _CRITICAL_BAR_SATURATION_FACTOR
+
+    span = band_end - band_start
+    progress = (risk_score - band_start) / span if span > 0 else 1.0
+    progress = min(max(progress, 0.0), 1.0)
+
+    position = (band_index - 1) * band_width + progress * band_width
+    # Sıfırdan büyük her skor gözle görülür bir dolgu üretmeli; aksi halde
+    # "DÜŞÜK" seviyesi tamamen boş bir çubukla, yani "TEMİZ" ile aynı
+    # görünürdü.
+    return max(1, min(round(position), _RISK_SCORE_DISPLAY_MAX))
 
 # Öncelik sıralaması açıkça tanımlanmıştır; Enum sırası değişse dahi
 # sıralama mantığı bozulmaz (CRITICAL > HIGH > MEDIUM > LOW > INFO).
@@ -196,8 +261,10 @@ class RiskSummary:
     risk_score: int
     risk_level: str
     risk_class: str
-    # Yalnızca SUNUM içindir (ilerleme çubuğu genişliği); karşılaştırma veya
-    # eşik mantığında kullanılmamalıdır — bkz. _RISK_SCORE_DISPLAY_MAX.
+    # İlerleme çubuğunun doluluk yüzdesi (0-100). Skorun kendisi DEĞİL,
+    # skorun içine düştüğü risk BANDININ çubuktaki konumudur — bkz.
+    # _compute_risk_bar_position. Yalnızca SUNUM içindir; karşılaştırma veya
+    # eşik mantığında asla kullanılmamalıdır (onun için risk_score vardır).
     # Varsayılan değeri kasıtlı olarak yoktur: sessizce 0 genişlikli bir
     # çubuk üretmek yerine, eksik bırakılırsa kurulum anında hata versin.
     risk_score_normalized: int
@@ -240,7 +307,7 @@ def compute_risk_summary(findings: Sequence[ThreatFinding]) -> RiskSummary:
         risk_score=risk_score,
         risk_level=risk_level,
         risk_class=risk_class,
-        risk_score_normalized=min(risk_score, _RISK_SCORE_DISPLAY_MAX),
+        risk_score_normalized=_compute_risk_bar_position(risk_score),
     )
 
 

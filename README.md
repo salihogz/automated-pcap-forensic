@@ -30,7 +30,7 @@ python main.py -f samples/malicious/demo_capture.pcapng
 
 ![Threat findings](docs/report-findings.png)
 
-**Weighted risk summary:**
+**Weighted risk summary** — the score is an unbounded weighted sum (CRITICAL 30, HIGH 15, MEDIUM 5, LOW 1), so it keeps rising with the number of findings instead of saturating. The bar tracks the *risk band*, not the raw number, so it can never contradict the label next to it:
 
 ![Risk summary](docs/report-risk.png)
 
@@ -229,7 +229,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 224 / 224 tests passing · **92%** total coverage (branch coverage enabled)
+**Current status:** 239 / 239 tests passing · **92%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |

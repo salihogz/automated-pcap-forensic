@@ -307,27 +307,33 @@ class TestRiskSummaryAndChartBuilderUnits:
         summary_score_60 = r.compute_risk_summary([make_finding(ThreatSeverity.CRITICAL)] * 2)
         assert summary_score_60.risk_level == "KRİTİK"
 
-    def test_risk_score_is_unbounded_but_display_value_is_clamped(self):
-        """Ham skor sınırsız kalmalı, sunum değeri 0-100 aralığına kırpılmalıdır.
+    def test_risk_score_is_unbounded_but_display_value_stays_in_range(self):
+        """Ham skor sınırsız kalmalı, sunum değeri 0-100 aralığında olmalıdır.
 
-        Şablon ilerleme çubuğunu `width: {{ skor }}%` ile çiziyordu; ham skor
-        sınırsız bir ağırlıklı toplam olduğundan (20 HIGH = 300) çubuk
-        kapsayıcısını taşırıyor ve rapor "300 / 100" gibi anlamsız bir değer
-        basıyordu. Eşik tablosu ham skora göre kalibre edildiği için ham
-        değerin kendisi ASLA kırpılmamalıdır.
+        Şablon ilerleme çubuğunu `width: {{ değer }}%` ile çiziyor; ham skor
+        sınırsız bir ağırlıklı toplam olduğundan (20 HIGH = 300) doğrudan
+        kullanılırsa çubuk kapsayıcısını taşırır. Eşik tablosu ham skora göre
+        kalibre edildiği için ham değerin kendisi ASLA kırpılmamalıdır.
+
+        NOT: Sunum değeri skorun kendisi DEĞİL, skorun düştüğü risk bandının
+        çubuktaki konumudur (bkz. _compute_risk_bar_position ve
+        TestRiskBarAndLevelConsistency). Bu testin eski hâli
+        `risk_score_normalized == risk_score` bekliyordu; o eşitlik tam da
+        "KRİTİK etiketi + %30 dolu çubuk" çelişkisinin kaynağıydı.
         """
         def make_finding(severity: ThreatSeverity) -> ThreatFinding:
             return ThreatFinding("ID", "Title", severity, "", {}, "src", "dst", FIXED_TEST_NOW)
 
         summary = r.compute_risk_summary([make_finding(ThreatSeverity.HIGH)] * 20)
         assert summary.risk_score == 300, "ham skor kırpılmamalı (eşik tablosu buna bağlı)"
-        assert summary.risk_score_normalized == 100, "sunum değeri 100'de sınırlanmalı"
+        assert summary.risk_score_normalized == 100, "çubuk kapsayıcısını taşımamalı"
         assert summary.risk_level == "KRİTİK"
 
-        # Eşiğin altındaki skorlarda iki değer birbirinin aynısı olmalı.
-        low_summary = r.compute_risk_summary([make_finding(ThreatSeverity.HIGH)])
-        assert low_summary.risk_score == 15
-        assert low_summary.risk_score_normalized == 15
+        # Tek bir HIGH: ham skor 15, ama çubuk YÜKSEK bandının başında olmalı.
+        high_summary = r.compute_risk_summary([make_finding(ThreatSeverity.HIGH)])
+        assert high_summary.risk_score == 15
+        assert high_summary.risk_level == "YÜKSEK"
+        assert high_summary.risk_score_normalized == 50
 
         assert r.compute_risk_summary([]).risk_score_normalized == 0
 
@@ -993,3 +999,91 @@ class TestLayeredProtocolChart:
 
         assert ids.index("layered_protocol_distribution") == ids.index("protocol_distribution") + 1
         assert len(charts) == 7
+
+
+class TestRiskBarAndLevelConsistency:
+    """Risk seviyesi etiketi ile ilerleme çubuğu asla çelişmemeli."""
+
+    # (etiket -> çubuğun izin verilen aralığı). Bantlar çubuğu dörde böler.
+    LEVEL_BANDS: ClassVar[dict[str, tuple[int, int]]] = {
+        "TEMİZ": (0, 0),
+        "DÜŞÜK": (1, 25),
+        "ORTA": (25, 50),
+        "YÜKSEK": (50, 75),
+        "KRİTİK": (75, 100),
+    }
+
+    @staticmethod
+    def _findings(**counts: int) -> list[ThreatFinding]:
+        out: list[ThreatFinding] = []
+        for name, n in counts.items():
+            severity = ThreatSeverity[name.upper()]
+            out.extend(
+                ThreatFinding(f"R-{name}-{i}", "t", severity, "d", {}, "src")
+                for i in range(n)
+            )
+        return out
+
+    def test_single_low_finding_is_not_reported_as_clean(self):
+        """1-3 puanlık skorlar "TEMİZ" DEĞİL "DÜŞÜK" olmalı.
+
+        Regresyon: DÜŞÜK eşiği 4'tü, dolayısıyla 1, 2 veya 3 adet LOW bulgu
+        hiçbir eşiği karşılamıyor ve "TEMİZ" kovasına düşüyordu. Rapor, bulgu
+        tablosunda gerçek bulguları listelerken en üstte "Risk Seviyesi:
+        TEMİZ" yazıyordu. Adli bir raporda hatanın bu yönü -- var olan bulguyu
+        yok saymak -- en tehlikelisidir.
+        """
+        for count in (1, 2, 3):
+            summary = r.compute_risk_summary(self._findings(low=count))
+            assert summary.risk_score == count
+            assert summary.total_findings == count
+            assert summary.risk_level == "DÜŞÜK", (
+                f"{count} adet LOW bulgu '{summary.risk_level}' olarak raporlandı"
+            )
+
+    def test_clean_is_reserved_for_zero_weight(self):
+        """"TEMİZ" yalnızca ağırlıklı skor 0 iken görünmeli."""
+        assert r.compute_risk_summary([]).risk_level == "TEMİZ"
+        # INFO'nun ağırlığı 0'dır (bilgilendirme, tehdit değil).
+        assert r.compute_risk_summary(self._findings(info=5)).risk_level == "TEMİZ"
+
+    @pytest.mark.parametrize(
+        "counts",
+        [
+            {"low": 1}, {"low": 4}, {"medium": 1}, {"medium": 2, "low": 4},
+            {"high": 1}, {"high": 1, "medium": 2, "low": 4},
+            {"critical": 1}, {"critical": 2},
+            {"critical": 1, "high": 4, "medium": 1, "low": 1},
+            {"high": 20}, {"critical": 100},
+        ],
+    )
+    def test_bar_position_always_matches_its_level_band(self, counts):
+        """Çubuğun doluluğu, etiketin bandının dışına ASLA çıkmamalı.
+
+        Regresyon: çubuk `min(skor, 100)` idi. Tek bir CRITICAL bulgu 30 puan
+        eder; rapor "KRİTİK" yazarken çubuk %30 dolu, yani gözle "düşük risk"
+        görünüyordu. Ters uçta 20 HIGH (300) ile 100 CRITICAL (3000) çubukta
+        ayırt edilemiyor, ikisi de %100'e kırpılıyordu.
+        """
+        summary = r.compute_risk_summary(self._findings(**counts))
+        low, high = self.LEVEL_BANDS[summary.risk_level]
+
+        assert low <= summary.risk_score_normalized <= high, (
+            f"skor={summary.risk_score} seviye={summary.risk_level} "
+            f"çubuk=%{summary.risk_score_normalized} bandın ({low}-{high}) dışında"
+        )
+
+    def test_bar_never_exceeds_container_width(self):
+        """Sınırsız skor, çubuğu kapsayıcısından taşırmamalı."""
+        summary = r.compute_risk_summary(self._findings(critical=1000))
+        assert summary.risk_score == 30000
+        assert summary.risk_score_normalized == r._RISK_SCORE_DISPLAY_MAX
+
+    def test_bar_is_monotonic_in_score(self):
+        """Skor arttıkça çubuk asla geri gitmemeli."""
+        positions = [
+            r._compute_risk_bar_position(score)
+            for score in range(0, 400)
+        ]
+        assert positions == sorted(positions)
+        assert positions[0] == 0
