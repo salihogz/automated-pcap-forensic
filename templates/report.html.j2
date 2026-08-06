@@ -234,7 +234,7 @@
                     {% for k, v in risk_summary.severity_counts.items() if v > 0 %}
                         {{ k }}: {{ v }}{% if not loop.last %}, {% endif %}
                     {% endfor %}
-                </strong>şeklindedir. Sistem genelinde belirlenen risk seviyesi <strong>{{ risk_summary.risk_level }}</strong> (Ağırlıklı Skor: {{ risk_summary.risk_score }}/100 [Normalized]) olarak değerlendirilmiştir.
+                </strong>şeklindedir. Sistem genelinde belirlenen risk seviyesi <strong>{{ risk_summary.risk_level }}</strong> (Ağırlıklı Skor: {{ risk_summary.risk_score }}) olarak değerlendirilmiştir.
             {% else %}
                 herhangi bir güvenlik ihlali veya şüpheli aktivite tespiti yapılmamıştır. Sistem genel risk seviyesi <strong>TEMİZ</strong> olarak değerlendirilmiştir.
             {% endif %}
@@ -583,14 +583,14 @@
                     </div>
                     {% endfor %}
                     <div style="border-left: 1px solid var(--border); padding-left: 20px; text-align:center;">
-                        <div class="label" style="color:var(--muted); font-size:11px; text-transform:uppercase;">Skor</div>
-                        <div style="font-size:22px; font-weight:700; margin-top:4px; color:var(--accent);">{{ risk_summary.risk_score }} / 100</div>
+                        <div class="label" style="color:var(--muted); font-size:11px; text-transform:uppercase;">Ağırlıklı Skor</div>
+                        <div style="font-size:22px; font-weight:700; margin-top:4px; color:var(--accent);">{{ risk_summary.risk_score }}</div>
                     </div>
                 </div>
             </div>
-            
-            <div class="progress-bar-bg" title="Risk Skoru: {{ risk_summary.risk_score }}/100">
-                <div class="progress-bar-fill" style="width: {{ risk_summary.risk_score }}%;"></div>
+
+            <div class="progress-bar-bg" title="Ağırlıklı risk skoru: {{ risk_summary.risk_score }} (gösterge 100'de sınırlandırılmıştır)">
+                <div class="progress-bar-fill" style="width: {{ risk_summary.risk_score_normalized }}%;"></div>
             </div>
         </div>
     </section>

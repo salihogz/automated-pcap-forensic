@@ -268,6 +268,30 @@ class TestRiskSummaryAndChartBuilderUnits:
         summary_score_60 = r.compute_risk_summary([make_finding(ThreatSeverity.CRITICAL)] * 2)
         assert summary_score_60.risk_level == "KRİTİK"
 
+    def test_risk_score_is_unbounded_but_display_value_is_clamped(self):
+        """Ham skor sınırsız kalmalı, sunum değeri 0-100 aralığına kırpılmalıdır.
+
+        Şablon ilerleme çubuğunu `width: {{ skor }}%` ile çiziyordu; ham skor
+        sınırsız bir ağırlıklı toplam olduğundan (20 HIGH = 300) çubuk
+        kapsayıcısını taşırıyor ve rapor "300 / 100" gibi anlamsız bir değer
+        basıyordu. Eşik tablosu ham skora göre kalibre edildiği için ham
+        değerin kendisi ASLA kırpılmamalıdır.
+        """
+        def make_finding(severity: ThreatSeverity) -> ThreatFinding:
+            return ThreatFinding("ID", "Title", severity, "", {}, "src", "dst", FIXED_TEST_NOW)
+
+        summary = r.compute_risk_summary([make_finding(ThreatSeverity.HIGH)] * 20)
+        assert summary.risk_score == 300, "ham skor kırpılmamalı (eşik tablosu buna bağlı)"
+        assert summary.risk_score_normalized == 100, "sunum değeri 100'de sınırlanmalı"
+        assert summary.risk_level == "KRİTİK"
+
+        # Eşiğin altındaki skorlarda iki değer birbirinin aynısı olmalı.
+        low_summary = r.compute_risk_summary([make_finding(ThreatSeverity.HIGH)])
+        assert low_summary.risk_score == 15
+        assert low_summary.risk_score_normalized == 15
+
+        assert r.compute_risk_summary([]).risk_score_normalized == 0
+
     def test_build_charts_list_exact_count_and_titles(self, populated_statistics: GeneralStatistics):
         """Directly tests Reporter._build_charts_list to verify exact count (5) and keywords in titles."""
         reporter = r.Reporter()

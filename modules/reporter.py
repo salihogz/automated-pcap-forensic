@@ -87,6 +87,17 @@ _RISK_THRESHOLDS: Final[tuple[tuple[int, str, str], ...]] = (
     (30, "KRİTİK", "critical"),
 )
 
+# `risk_score` SINIRSIZ bir ağırlıklı toplamdır (7 HIGH = 105, 20 HIGH = 300);
+# eşik tablosu bu ham değere göre kalibre edildiğinden ham değer asla
+# ölçeklenmemeli veya kırpılmamalıdır. Ancak rapor bu skoru "X / 100" olarak
+# ve genişliği `width: {{ skor }}%` olan bir ilerleme çubuğuyla gösteriyordu:
+# olaylı bir capture'da "300 / 100" gibi anlamsız bir değer basılıyor ve
+# çubuk kapsayıcısını taşırıyordu. Bu yüzden SUNUM için ayrı, 0-100 aralığına
+# kırpılmış bir alan (`risk_score_normalized`) üretilir; ham `risk_score`
+# ise metinde olduğu gibi, kırpılmadan gösterilmeye devam eder (kanıt kaybı
+# olmaz).
+_RISK_SCORE_DISPLAY_MAX: Final[int] = 100
+
 # Öncelik sıralaması açıkça tanımlanmıştır; Enum sırası değişse dahi
 # sıralama mantığı bozulmaz (CRITICAL > HIGH > MEDIUM > LOW > INFO).
 _SEVERITY_PRIORITY: Final[dict[ThreatSeverity, int]] = {
@@ -182,6 +193,11 @@ class RiskSummary:
     risk_score: int
     risk_level: str
     risk_class: str
+    # Yalnızca SUNUM içindir (ilerleme çubuğu genişliği); karşılaştırma veya
+    # eşik mantığında kullanılmamalıdır — bkz. _RISK_SCORE_DISPLAY_MAX.
+    # Varsayılan değeri kasıtlı olarak yoktur: sessizce 0 genişlikli bir
+    # çubuk üretmek yerine, eksik bırakılırsa kurulum anında hata versin.
+    risk_score_normalized: int
 
 
 def compute_risk_summary(findings: Sequence[ThreatFinding]) -> RiskSummary:
@@ -221,6 +237,7 @@ def compute_risk_summary(findings: Sequence[ThreatFinding]) -> RiskSummary:
         risk_score=risk_score,
         risk_level=risk_level,
         risk_class=risk_class,
+        risk_score_normalized=min(risk_score, _RISK_SCORE_DISPLAY_MAX),
     )
 
 
