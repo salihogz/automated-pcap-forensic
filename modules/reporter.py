@@ -543,6 +543,84 @@ def _prepare_statistics_for_template(stats: GeneralStatistics) -> dict[str, Any]
     }
 
 
+@dataclass(frozen=True, slots=True)
+class ThreatIntelSummary:
+    """Bir IP için sağlayıcı sonuçlarının rapora hazır özeti."""
+
+    ip: str
+    results: list[NormalizedIOCResult]
+    total_providers: int
+    answered_providers: int
+    malicious_providers: int
+    consensus_label: str
+    consensus_class: str
+    consensus_detail: str
+
+
+def _prepare_threat_intel_for_template(
+    threat_intel: dict[str, list[NormalizedIOCResult]],
+) -> list[ThreatIntelSummary]:
+    """IP başına sağlayıcı sonuçlarını, "cevap verememe"yi "temiz" saymayan
+    bir uzlaşı (consensus) özetine dönüştürür.
+
+    NEDEN PYTHON'DA, ŞABLONDA DEĞİL: Bu mantık daha önce şablonun içinde
+    `selectattr` zincirleriyle yapılıyordu ve sessizce YANLIŞ bir sonuç
+    üretiyordu:
+
+        {% elif clean_count > 0 %} CONSENSUS: CLEAN
+
+    Üç sağlayıcıdan ikisi zaman aşımına uğrayıp yalnızca biri "temiz" dediğinde
+    bu dal çalışıyor ve rapor "0 / 3 sağlayıcı zararlı dedi — CONSENSUS: CLEAN"
+    yazıyordu. Hâlbuki uzlaşı diye bir şey yoktu: üç sağlayıcının ikisi HİÇ OY
+    KULLANAMAMIŞTI. `NormalizedIOCResult.is_malicious` üç durumludur ve `None`
+    "sağlayıcı hüküm veremedi" demektir — asla "temiz" ile karıştırılmamalıdır
+    (bkz. threat_intel.py). Bir IOC'yi yanlışlıkla temiz göstermek, adli bir
+    raporda yapılabilecek en zararlı hatadır; payda da artık toplam sağlayıcı
+    değil, YANIT VEREN sağlayıcı sayısıdır.
+    """
+    summaries: list[ThreatIntelSummary] = []
+
+    for ip, results in threat_intel.items():
+        total = len(results)
+        answered = [r for r in results if r.is_malicious is not None]
+        malicious = [r for r in answered if r.is_malicious is True]
+        unanswered = total - len(answered)
+
+        if not answered:
+            label, css = "VERİ YOK", "INFO"
+            detail = f"Hiçbir sağlayıcı hüküm veremedi ({total} sağlayıcı denendi)."
+        elif len(malicious) == len(answered):
+            label, css = "ZARARLI", "CRITICAL"
+            detail = f"Yanıt veren {len(answered)} sağlayıcının tamamı zararlı dedi."
+        elif malicious:
+            label, css = "ÇELİŞKİLİ", "HIGH"
+            detail = f"Yanıt veren {len(answered)} sağlayıcıdan {len(malicious)} tanesi zararlı dedi."
+        elif unanswered:
+            label, css = "KISMİ TEMİZ", "MEDIUM"
+            detail = (
+                f"Yanıt veren {len(answered)} sağlayıcı temiz dedi, ancak {unanswered} "
+                f"sağlayıcı hüküm veremedi — sonuç eksiktir."
+            )
+        else:
+            label, css = "TEMİZ", "LOW"
+            detail = f"{total} sağlayıcının tamamı yanıt verdi ve temiz dedi."
+
+        summaries.append(
+            ThreatIntelSummary(
+                ip=ip,
+                results=list(results),
+                total_providers=total,
+                answered_providers=len(answered),
+                malicious_providers=len(malicious),
+                consensus_label=label,
+                consensus_class=css,
+                consensus_detail=detail,
+            )
+        )
+
+    return summaries
+
+
 def _prepare_findings_for_template(
     findings: Sequence[ThreatFinding], hostname_map: dict[str, str] | None = None
 ) -> list[dict[str, Any]]:
@@ -1060,7 +1138,7 @@ class Reporter:
             metadata=metadata,
             statistics=_prepare_statistics_for_template(statistics),
             findings=findings_rows,
-            threat_intel=threat_intel,
+            threat_intel=_prepare_threat_intel_for_template(threat_intel),
             risk_summary=risk_summary,
             charts=charts_list,
         )
@@ -1235,7 +1313,7 @@ class Reporter:
         metadata: ReportMetadata,
         statistics: dict[str, Any],
         findings: list[dict[str, Any]],
-        threat_intel: dict[str, list[NormalizedIOCResult]],
+        threat_intel: list[ThreatIntelSummary],
         risk_summary: RiskSummary,
         charts: list[ChartSection],
     ) -> str:

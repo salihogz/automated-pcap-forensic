@@ -229,7 +229,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 239 / 239 tests passing · **92%** total coverage (branch coverage enabled)
+**Current status:** 248 / 248 tests passing · **93%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
@@ -239,7 +239,7 @@ Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency v
 | `modules/models.py` | 94% |
 | `modules/statistics.py` | 93% |
 | `modules/parser.py` | 92% |
-| `modules/reporter.py` | 90% |
+| `modules/reporter.py` | 91% |
 | `modules/threat_intel.py` | 86% |
 
 `modules/threat_intel.py` is the lowest — its uncovered lines are mostly provider-specific HTTP error branches. The remaining gaps in `parser.py` are the module-level `ImportError` fallbacks for optional Scapy TLS/HTTP layers, which cannot be exercised without breaking the Scapy install.

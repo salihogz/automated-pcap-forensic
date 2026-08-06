@@ -1087,3 +1087,178 @@ class TestRiskBarAndLevelConsistency:
         ]
         assert positions == sorted(positions)
         assert positions[0] == 0
+
+
+class TestThreatIntelConsensus:
+    """Sağlayıcı uzlaşısı: "hüküm veremedi" ASLA "temiz" sayılmamalı."""
+
+    @staticmethod
+    def _result(source: str, is_malicious: bool | None, error: str | None = None):
+        return NormalizedIOCResult(
+            source=source,
+            ip="9.9.9.9",
+            is_malicious=is_malicious,
+            raw_score=0 if is_malicious is not None else None,
+            categories=(),
+            last_seen=None,
+            queried_at=FIXED_TEST_NOW,
+            provider_error_code=None,
+            provider_error_message=error,
+            confidence=None,
+        )
+
+    def _summarize(self, *results):
+        summaries = r._prepare_threat_intel_for_template({"9.9.9.9": list(results)})
+        assert len(summaries) == 1
+        return summaries[0]
+
+    def test_partial_answers_are_not_reported_as_clean(self):
+        """1 temiz + 2 hata "TEMİZ" DEĞİL "KISMİ TEMİZ" olmalı.
+
+        Regresyon: şablon `{% elif clean_count > 0 %} CONSENSUS: CLEAN`
+        diyordu. Üç sağlayıcıdan ikisi zaman aşımına uğrayıp yalnızca biri
+        "temiz" dediğinde rapor "0 / 3 sağlayıcı zararlı dedi — CONSENSUS:
+        CLEAN" yazıyordu; oysa uzlaşı diye bir şey yoktu, iki sağlayıcı hiç oy
+        kullanamamıştı. Bir IOC'yi yanlışlıkla temiz göstermek adli bir
+        raporda yapılabilecek en zararlı hatadır.
+        """
+        summary = self._summarize(
+            self._result("VirusTotal", False),
+            self._result("AbuseIPDB", None, "timeout"),
+            self._result("AlienVault OTX", None, "HTTP 500"),
+        )
+
+        assert summary.consensus_label == "KISMİ TEMİZ"
+        assert summary.consensus_label != "TEMİZ"
+        assert summary.answered_providers == 1
+        assert summary.total_providers == 3
+        # Payda toplam sağlayıcı değil, YANIT VEREN sağlayıcı olmalı.
+        assert summary.malicious_providers == 0
+        assert "eksiktir" in summary.consensus_detail
+
+    def test_all_providers_answered_and_clean(self):
+        summary = self._summarize(
+            self._result("VirusTotal", False),
+            self._result("AbuseIPDB", False),
+            self._result("AlienVault OTX", False),
+        )
+        assert summary.consensus_label == "TEMİZ"
+        assert summary.answered_providers == summary.total_providers == 3
+
+    def test_all_providers_malicious(self):
+        summary = self._summarize(
+            self._result("VirusTotal", True),
+            self._result("AbuseIPDB", True),
+        )
+        assert summary.consensus_label == "ZARARLI"
+        assert summary.consensus_class == "CRITICAL"
+        assert summary.malicious_providers == 2
+
+    def test_disagreement_is_flagged_as_conflicting(self):
+        summary = self._summarize(
+            self._result("VirusTotal", True),
+            self._result("AbuseIPDB", False),
+            self._result("AlienVault OTX", None, "timeout"),
+        )
+        assert summary.consensus_label == "ÇELİŞKİLİ"
+        assert summary.answered_providers == 2
+        assert summary.malicious_providers == 1
+
+    def test_no_provider_could_answer(self):
+        summary = self._summarize(
+            self._result("VirusTotal", None, "timeout"),
+            self._result("AbuseIPDB", None, "HTTP 401"),
+        )
+        assert summary.consensus_label == "VERİ YOK"
+        assert summary.answered_providers == 0
+        assert summary.malicious_providers == 0
+
+    def test_malicious_verdict_survives_unanswered_providers(self):
+        """Tek bir sağlayıcı bile zararlı dediyse bu asla gizlenmemeli."""
+        summary = self._summarize(
+            self._result("VirusTotal", True),
+            self._result("AbuseIPDB", None, "timeout"),
+            self._result("AlienVault OTX", None, "timeout"),
+        )
+        assert summary.consensus_label == "ZARARLI"
+        assert summary.consensus_class == "CRITICAL"
+
+    def test_rendered_report_never_claims_clean_on_partial_data(
+        self, real_template_dir: Path, tmp_path: Path, populated_statistics: GeneralStatistics
+    ):
+        """Uçtan uca: kısmi veride rapor HTML'i "temiz" iddiasında bulunmamalı."""
+        pcap_source = tmp_path / "partial_ti.pcap"
+        pcap_source.write_bytes(b"\xd4\xc3\xb2\xa1")
+
+        html = r.Reporter(template_dir=real_template_dir).generate(
+            statistics=populated_statistics,
+            findings=[],
+            threat_intel={
+                "9.9.9.9": [
+                    self._result("VirusTotal", False),
+                    self._result("AbuseIPDB", None, "timeout"),
+                    self._result("AlienVault OTX", None, "HTTP 500"),
+                ]
+            },
+            source_file=pcap_source,
+            analysis_duration=1.0,
+        ).read_text(encoding="utf-8")
+
+        assert "KISMİ TEMİZ" in html
+        assert "CONSENSUS: CLEAN" not in html
+        assert "2 yanıtsız" in html
+
+
+def test_empty_threat_intel_state_does_not_imply_clean(
+    real_template_dir: Path, tmp_path: Path, populated_statistics: GeneralStatistics
+):
+    """Boş TI bölümü "kontrol edildi, temiz" gibi okunmamalı.
+
+    "Threat Intelligence sonucu bulunmamaktadır." ifadesi, zenginleştirmenin
+    hiç çalışmamış olmasıyla çalışıp bir şey bulamamış olmasını birbirine
+    karıştırıyordu.
+    """
+    pcap_source = tmp_path / "no_ti.pcap"
+    pcap_source.write_bytes(b"\xd4\xc3\xb2\xa1")
+
+    html = r.Reporter(template_dir=real_template_dir).generate(
+        statistics=populated_statistics,
+        findings=[],
+        threat_intel={},
+        source_file=pcap_source,
+        analysis_duration=1.0,
+    ).read_text(encoding="utf-8")
+
+    assert "çalıştırılmadı" in html
+    assert "temiz olduğu anlamına GELMEZ" in html
+
+
+def test_report_declares_viewport_for_responsive_css(
+    real_template_dir: Path, tmp_path: Path, populated_statistics: GeneralStatistics
+):
+    """Duyarlı CSS'in mobilde çalışabilmesi için viewport meta'sı şart.
+
+    Regresyon: şablonda `@media (max-width: 900px)` kuralları vardı ama
+    viewport meta'sı yoktu; mobil tarayıcılar ~980px'lik sanal viewport
+    kullandığı için o kurallar telefonda hiç tetiklenmiyor, yazılmış düzen
+    ölü kod oluyordu.
+    """
+    pcap_source = tmp_path / "viewport.pcap"
+    pcap_source.write_bytes(b"\xd4\xc3\xb2\xa1")
+
+    html = r.Reporter(template_dir=real_template_dir).generate(
+        statistics=populated_statistics,
+        findings=[],
+        threat_intel={},
+        source_file=pcap_source,
+        analysis_duration=1.0,
+    ).read_text(encoding="utf-8")
+
+    soup = BeautifulSoup(html, "html.parser")
+    viewport = soup.find("meta", attrs={"name": "viewport"})
+    assert viewport is not None, "viewport meta'sı yok, responsive CSS mobilde çalışmaz"
+    assert "width=device-width" in viewport["content"]
+    assert "max-width: 900px" in html
+
+    # Erişilebilirlik: her th'nin scope'u olmalı (TI tablosunda eksikti).
+    assert all(th.get("scope") for th in soup.find_all("th"))

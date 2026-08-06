@@ -2,6 +2,11 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
+{# Bu satır olmadan mobil tarayıcılar sayfayı ~980px'lik sanal bir viewport'ta
+   render eder; dolayısıyla aşağıdaki `@media (max-width: 900px)` kuralları
+   telefonda HİÇ tetiklenmez ve yazılmış olan duyarlı (responsive) düzen ölü
+   koda dönüşür. Rapor sahada tablet/telefondan da açılabilmeli. #}
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PCAP Adli Analiz Raporu — {{ metadata.source_file }}</title>
 <style>
     :root {
@@ -483,47 +488,44 @@
 
             <thead>
             <tr>
-                <th>IP / Özet</th>
-                <th>Sağlayıcı (Provider)</th>
-                <th>Zararlı mı?</th>
-                <th>Ham Skor</th>
-                <th>Güven Oranı</th>
-                <th>Kategoriler</th>
-                <th>Son Görülme</th>
-                <th>Durum</th>
+                <th scope="col">IP / Özet</th>
+                <th scope="col">Sağlayıcı (Provider)</th>
+                <th scope="col">Zararlı mı?</th>
+                <th scope="col" title="Her sağlayıcının kendi ölçeğindeki ham değeri: VirusTotal = işaretleyen motor sayısı, AbuseIPDB = 0-100 güven skoru, OTX = pulse sayısı. Sağlayıcılar arasında doğrudan karşılaştırılamaz.">Ham Skor</th>
+                <th scope="col">Güven Oranı</th>
+                <th scope="col">Kategoriler</th>
+                <th scope="col">Son Görülme</th>
+                <th scope="col">Durum</th>
             </tr>
             </thead>
 
             <tbody>
 
-            {% for ip, results in threat_intel.items() %}
-                {% set malicious_count = results | selectattr('is_malicious', 'equalto', true) | list | length %}
-                {% set clean_count = results | selectattr('is_malicious', 'equalto', false) | list | length %}
-                {% set total_count = results | length %}
-
-                {% for result in results %}
+            {# Uzlaşı (consensus) hesabı şablonda DEĞİL, reporter.py'deki
+               _prepare_threat_intel_for_template içinde yapılır: "sağlayıcı
+               hüküm veremedi" (is_malicious = None) durumunu "temiz" saymak
+               adli bir raporda en zararlı hatadır ve bu mantık test
+               edilebilir olmalıdır. #}
+            {% for entry in threat_intel %}
+                {% for result in entry.results %}
                 <tr>
 
                     {% if loop.first %}
-                    <td rowspan="{{ total_count }}">
-                        <strong>{{ ip }}</strong>
+                    <td rowspan="{{ entry.total_providers }}">
+                        <strong>{{ entry.ip }}</strong>
                         <div class="ti-source" style="margin-top:6px; line-height:1.4;">
-                            Zararlı Olarak İşaretleyen Sağlayıcı:<br>
-                            <strong class="{% if malicious_count > 0 %}ti-malicious{% else %}ti-clean{% endif %}">
-                                {{ malicious_count }} / {{ total_count }}
+                            Zararlı diyen / yanıt veren sağlayıcı:<br>
+                            <strong class="{% if entry.malicious_providers > 0 %}ti-malicious{% elif entry.answered_providers > 0 %}ti-clean{% else %}ti-error{% endif %}">
+                                {{ entry.malicious_providers }} / {{ entry.answered_providers }}
                             </strong>
-                        </div>
-                        <div style="margin-top:8px;">
-                            {% if malicious_count == total_count and total_count > 0 %}
-                                <span class="badge CRITICAL" style="font-size:9px;">CONSENSUS: MALICIOUS</span>
-                            {% elif malicious_count > 0 %}
-                                <span class="badge HIGH" style="font-size:9px;">CONSENSUS: MIXED</span>
-                            {% elif clean_count > 0 %}
-                                <span class="badge LOW" style="font-size:9px;">CONSENSUS: CLEAN</span>
-                            {% else %}
-                                <span class="badge INFO" style="font-size:9px;">CONSENSUS: UNKNOWN</span>
+                            {% if entry.answered_providers < entry.total_providers %}
+                            <span class="ti-error">({{ entry.total_providers - entry.answered_providers }} yanıtsız)</span>
                             {% endif %}
                         </div>
+                        <div style="margin-top:8px;">
+                            <span class="badge {{ entry.consensus_class }}" style="font-size:9px;">{{ entry.consensus_label }}</span>
+                        </div>
+                        <div class="ti-source" style="margin-top:6px; line-height:1.4;">{{ entry.consensus_detail }}</div>
                     </td>
                     {% endif %}
 
@@ -591,8 +593,16 @@
 
         {% else %}
 
+        {# "Sonuç yok" ifadesi tek başına iki farklı durumu birbirine
+           karıştırıyordu: zenginleştirme HİÇ ÇALIŞMADI mı, yoksa çalıştı da
+           bir şey mi bulamadı? Adli bir raporda bu ayrım kritiktir; okuyan
+           kişi ikincisini "IP'ler kontrol edildi ve temiz çıktı" diye
+           okuyabilir. #}
         <div class="empty-state">
-            Threat Intelligence sonucu bulunmamaktadır.
+            Threat Intelligence zenginleştirmesi çalıştırılmadı: capture'da dış
+            sağlayıcılara sorulabilecek genel (public) bir IP bulunmadı ya da
+            hiçbir sağlayıcı için API anahtarı yapılandırılmadı.
+            <strong>Bu, IP'lerin temiz olduğu anlamına GELMEZ.</strong>
         </div>
 
         {% endif %}
