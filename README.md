@@ -208,6 +208,7 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 - CSV Export
 - PDF Export
 - Docker Support
+- **Chunked processing for very large captures** — see below
 
 ---
 
@@ -244,6 +245,24 @@ The reporter has a snapshot test against `tests/snapshots/report_snapshot.html`.
 ```bash
 UPDATE_SNAPSHOT=1 pytest tests/test_reporter.py -k snapshot
 ```
+
+---
+
+## Known Limitation: Memory on Very Large Captures
+
+Parsing streams the file (`PcapReader`, never `rdpcap`), but the resulting `PacketInfo` objects are all held in memory, because the detection rules need to see the whole capture.
+
+Measured on a 300k-packet capture with realistic IP diversity: **291 bytes per packet** held after parsing, peaking at ~480 bytes during detection. So roughly:
+
+| Capture | Approx. memory |
+| --- | --- |
+| 300k packets | ~85 MB |
+| 1M packets | ~290 MB |
+| 10M packets | ~2.9 GB |
+
+Memory scales with *packet count*, not file size — a capture of small packets holds far more packets per MB. Captures above 500 MB log a warning with an estimate; the analysis is **not** refused, since refusing to process a large piece of evidence would be unacceptable in a forensic tool.
+
+The planned fix is chunked processing: every detection rule has a bounded time window (the largest is exfiltration's 300s), so the capture can be split into time slices with an overlap of at least that window, with findings deduplicated across the overlap. This is deferred rather than rushed — getting the overlap or deduplication wrong would produce *silent false negatives*, which is the worst possible failure mode for a forensic tool.
 
 ---
 
