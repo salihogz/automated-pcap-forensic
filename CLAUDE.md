@@ -27,11 +27,26 @@ pytest --cov --cov-report=html         # coverage (writes htmlcov/)
 # Lint + dependency vulnerability scan (both run in CI)
 ruff check .
 pip-audit
+
+# Docker (image runs the CLI; args after the image name go straight to main.py)
+docker build -t pcap-forensic .
+docker run --rm -v "$PWD/reports:/app/reports" pcap-forensic \
+    -f samples/malicious/demo_capture.pcapng --format all
 ```
 
 Coverage sources are configured in `pyproject.toml` (`source = ["."]` plus omits). Do **not** revert to `--cov=modules --cov=main`: `main` does not resolve as a module name there, so `main.py` silently dropped out of the report entirely — an uncovered file that simply isn't listed reads as if it were covered.
 
-`pyproject.toml` configures ruff, pytest and coverage (it is **not** a packaging manifest — dependencies live in `requirements.txt` / `requirements-dev.txt`). Two ruff decisions there are deliberate and should not be "fixed": `RUF001/002/003` (ambiguous-unicode) are ignored because the Turkish docstrings/comments trigger 1600+ false positives, and `UP042` is ignored because switching `class X(str, Enum)` to `StrEnum` would change what `str(member)` returns — the report template relies on the current behaviour via `finding.severity|string`. `ruff format` has **not** been applied to the codebase, so CI runs `ruff check` only. No Docker support yet (listed as planned in README).
+`pyproject.toml` configures ruff, pytest and coverage (it is **not** a packaging manifest — dependencies live in `requirements.txt` / `requirements-dev.txt`). Two ruff decisions there are deliberate and should not be "fixed": `RUF001/002/003` (ambiguous-unicode) are ignored because the Turkish docstrings/comments trigger 1600+ false positives, and `UP042` is ignored because switching `class X(str, Enum)` to `StrEnum` would change what `str(member)` returns — the report template relies on the current behaviour via `finding.severity|string`. `ruff format` has **not** been applied to the codebase, so CI runs `ruff check` only.
+
+## Docker
+
+Multi-stage build (`Dockerfile`): dependencies go into a venv in the builder stage, only `/opt/venv` plus runtime sources reach the final image; tests, scripts and docs are excluded via `.dockerignore`. Three things there are load-bearing and easy to break:
+
+- **`.dockerignore` needs `**/*.pcapng`, not `*.pcapng`.** Unlike `.gitignore`, a bare `*.pcapng` in `.dockerignore` only matches the context *root*, so `samples/clean/*.pcapng` was silently copied in — a 1.3 GB development capture ended up baked into the image (3.19 GB → 470 MB once fixed). A CI step asserts the synthetic demo is the only capture in the image, and another asserts `.env` isn't in it.
+- **`/app/reports` and `/app/logs` are `0777`.** The image runs as non-root `forensic` (UID 1000), but it must also survive `--user $(id -u):$(id -g)` with an arbitrary UID that doesn't exist in the image — otherwise `config.py`'s directory creation and the log `FileHandler` raise `PermissionError` at startup. Host mounts override these permissions anyway.
+- **The version is a build arg (`TOOL_VERSION`), not a hardcoded `LABEL`.** `config.TOOL_VERSION` is the single source of truth (a test pins `main.py`, `reporter.py` and `pyproject.toml` to it); a literal in the Dockerfile would be a fourth copy waiting to drift. The default is `dev`, which is honest rather than wrong.
+
+`MPLCONFIGDIR=/tmp/matplotlib` is set because a non-root (possibly HOME-less) user can't write matplotlib's default cache path. There is deliberately no `docker-compose.yml`: the tool is a one-shot CLI taking different arguments each run, so compose would only add `docker compose run --rm …` in front of the same arguments.
 
 ## Environment configuration
 

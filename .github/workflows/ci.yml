@@ -73,3 +73,53 @@ jobs:
           name: coverage-${{ matrix.python-version }}
           path: coverage.xml
           if-no-files-found: warn
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build --tag pcap-forensic:ci .
+
+      # İmajın derlenmesi yetmez, ÇALIŞTIĞI da doğrulanmalı: bağımlılıkları
+      # eksik ya da izinleri hatalı bir imaj da sorunsuz "build" olur.
+      # Demo capture imajın içinde geldiği için ek bir dosyaya gerek yok.
+      - name: Run the tool inside the image
+        run: |
+          # Dizin önceden ve yazılabilir olarak yaratılıyor: docker'ın kendisi
+          # yaratırsa root'a ait olur ve imajdaki root olmayan kullanıcı içine
+          # yazamaz (runner UID'si ile imajdaki UID 1000 aynı değil).
+          mkdir -p ci-out && chmod 777 ci-out
+          docker run --rm --volume "$PWD/ci-out:/app/reports" \
+            pcap-forensic:ci -f samples/malicious/demo_capture.pcapng --format all
+          # Dört biçimin de host'a yazıldığını doğrula (HTML + JSON + PDF + 3 CSV).
+          ls -1 ci-out/malicious
+          test -f ci-out/malicious/demo_capture_report.html
+          test -f ci-out/malicious/demo_capture_report.json
+          test -f ci-out/malicious/demo_capture_report.pdf
+          test -f ci-out/malicious/demo_capture_findings.csv
+
+      # .dockerignore'da "*.pcapng" deseni alt klasörleri KAPSAMAZ; bu daha
+      # önce geliştirme makinesindeki 1,3 GB'lık gerçek capture'ın imaja
+      # gömülmesine ve imajın 3,19 GB olmasına yol açtı. Bu adım, deseni
+      # bozan bir değişikliği yakalar.
+      - name: Assert no evidence file leaked into the image
+        run: |
+          captures=$(docker run --rm --entrypoint sh pcap-forensic:ci \
+            -c 'find /app/samples -name "*.pcap" -o -name "*.pcapng"')
+          echo "İmajdaki capture'lar: $captures"
+          if [ "$captures" != "/app/samples/malicious/demo_capture.pcapng" ]; then
+            echo "::error::Sentetik demo dışında bir capture imaja girmiş."
+            exit 1
+          fi
+
+      - name: Assert .env did not leak into the image
+        run: |
+          if docker run --rm --entrypoint sh pcap-forensic:ci -c 'test -e /app/.env'; then
+            echo "::error::.env imaja girmiş -- API anahtarları sızmış olabilir."
+            exit 1
+          fi

@@ -1,0 +1,61 @@
+# Build context'ten dışlananlar. İki ayrı amaç var: imajı küçük tutmak ve
+# imaja ASLA girmemesi gerekenleri engellemek.
+
+# ==========================
+# Gizli bilgi -- imaja girmesi kabul edilemez
+# ==========================
+# API anahtarları çalışma zamanında `--env-file .env` ile verilir; imaja
+# gömülmeleri, imajı paylaşan herkesle anahtarları paylaşmak demektir.
+.env
+
+# ==========================
+# Delil dosyaları
+# ==========================
+# Capture'lar imaja GÖMÜLMEZ; çalışma zamanında volume ile bağlanır. Bir
+# imaj kopyalanabilir ve dağıtılabilir bir nesnedir -- delilin oraya
+# sızması, delilin kontrolsüz çoğalması demektir.
+#
+# `**/` ŞART: .dockerignore'da "*.pcapng" yalnızca build context'in KÖKÜNDEKİ
+# dosyalarla eşleşir, alt klasörlerdekilerle değil. Bu desen olmadan
+# samples/clean/*.pcapng imaja giriyordu -- ölçüldü: geliştirme makinesindeki
+# 1,3 GB'lık gerçek capture imaja gömülmüş ve imajı 3,19 GB yapmıştı.
+# (.gitignore'da da aynı tuzak var, oradaki yorumun sebebi bu.)
+**/*.pcap
+**/*.pcapng
+# İstisna: sentetik demo capture (RFC 5737 / RFC 1918 adresleri, gerçek bir
+# ağa ait değil). İmaja alınıyor ki `docker run` klonlamadan da bir şey
+# gösterebilsin.
+!samples/malicious/demo_capture.pcapng
+
+# Üretilmiş çıktılar da delil türevidir; volume ile dışarı yazılır.
+reports/
+logs/
+
+# ==========================
+# Ortam ve önbellekler
+# ==========================
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ==========================
+# Çalışma zamanında gereksiz olanlar
+# ==========================
+# Test paketi ve geliştirme bağımlılıkları runtime imajına alınmaz; imaj
+# aracı ÇALIŞTIRMAK içindir, geliştirmek için değil. Testler CI'da host
+# üzerinde koşuyor.
+tests/
+scripts/
+docs/
+.github/
+.git/
+.gitignore
+.serena/
+.claude/
+*.md
+!README.md

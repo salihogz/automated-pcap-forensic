@@ -79,6 +79,35 @@ A provider with no key configured is **skipped**, not treated as an error — th
 
 `.env` is gitignored; `.env.example` is the tracked template and must never contain a real key.
 
+### Docker
+
+No Python setup needed — the image pins the interpreter and every dependency, which also means an analysis can be reproduced later with exactly the same toolchain:
+
+```bash
+docker build -t pcap-forensic .
+
+# Analyze the demo capture bundled in the image
+docker run --rm -v "$PWD/reports:/app/reports" pcap-forensic \
+    -f samples/malicious/demo_capture.pcapng --format all
+
+# Analyze your own captures: mount them read-only, write reports back out
+docker run --rm \
+    --user "$(id -u):$(id -g)" \
+    -v "$PWD/samples:/app/samples:ro" \
+    -v "$PWD/reports:/app/reports" \
+    --env-file .env \
+    pcap-forensic -f samples/malicious/your_capture.pcapng --format all
+```
+
+Everything after the image name is passed straight to `main.py`, so all the flags above work unchanged.
+
+A few deliberate choices:
+
+- **Captures are never baked into the image.** They are mounted at runtime, read-only. An image is a copyable, distributable object; evidence leaking into one means evidence multiplying outside your control. Only the synthetic demo capture ships inside, so `docker run` does something useful with no volumes at all.
+- **`.env` is never baked in either** — pass it at runtime with `--env-file`.
+- **The container runs as a non-root user** (`forensic`, UID 1000). The tool parses untrusted input (someone else's capture file), so a parser vulnerability shouldn't land on root. Use `--user "$(id -u):$(id -g)"` when your host UID isn't 1000, so files written to the mounted `reports/` belong to you.
+- **The container clock is UTC**, so log lines and report timestamps are UTC rather than your local time. The JSON/CSV exports carry an explicit offset (`+00:00`), so nothing is ambiguous — but it will differ from a host run.
+
 ---
 
 ## Usage
@@ -201,7 +230,9 @@ Automated-PCAP-Forensic/
 ├── scripts/                 # generate_sample_capture.py
 ├── docs/                    # README screenshots
 ├── logs/                    # analysis.log (gitignored)
-├── .github/workflows/       # CI: ruff + pip-audit + pytest on every push
+├── .github/workflows/       # CI: ruff + pip-audit + pytest + docker build on every push
+├── Dockerfile               # multi-stage build, non-root runtime
+├── .dockerignore            # keeps evidence and .env out of the build context
 ├── config.py                # thresholds, windows, paths, API config
 ├── main.py                  # CLI entry point / pipeline orchestration
 ├── pyproject.toml           # ruff / pytest / coverage configuration
@@ -249,10 +280,11 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 - Environment-based Configuration
 - Comprehensive Error Handling
 
+- Docker Support
+
 ### Planned
 
 - Additional Detection Rules
-- Docker Support
 - **Chunked processing for very large captures** — see below
 
 ---
