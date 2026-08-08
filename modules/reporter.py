@@ -56,6 +56,7 @@ from jinja2.exceptions import TemplateError, UndefinedError
 
 import config
 from modules.models import GeneralStatistics, ThreatFinding, ThreatSeverity
+from modules.output_paths import resolve_output_dir
 from modules.threat_intel import NormalizedIOCResult
 
 logger = logging.getLogger(__name__)
@@ -1046,6 +1047,172 @@ class ChartBuilder:
             buffer.close()
 
 
+def build_chart_sections(
+    statistics: GeneralStatistics, chart_builder: ChartBuilder
+) -> list[ChartSection]:
+    """Tüm grafikleri ve bunlara ait analist detay tablolarını tek bir listede toplar.
+
+    Reporter'ın bir metodu değil, modül seviyesinde bir fonksiyondur: HTML
+    raporu (Reporter) ve PDF export'u (modules/exporters/pdf_exporter.py) AYNI
+    grafik kümesini, aynı başlık ve açıklamalarla göstermek zorundadır. Aynı
+    capture'ın iki adli çıktısının farklı grafikler içermesi, hangisinin
+    eksik olduğu sorusunu doğurur; tek liste tanımı bu soruyu ortadan kaldırır.
+    PDF'in bunun için bir Reporter (ve dolayısıyla bir Jinja2 ortamı)
+    kurmasına da gerek kalmaz.
+    """
+    charts: list[ChartSection] = []
+
+    # 1. Protokol Dağılımı
+    img, table = chart_builder.protocol_distribution_chart(
+        statistics.protocol_distribution
+    )
+    if img:
+        charts.append(
+            ChartSection(
+                id="protocol_distribution",
+                title="Protokol Dağılımı",
+                description=(
+                    "Yakalanan her paket, tespit edilebilen en üst katmanın protokolüyle "
+                    "tam olarak bir kez sayılır (uygulama → taşıma → ağ katmanı). Tek bir "
+                    "protokolün baskın olduğu capture'larda küçük protokollerin de "
+                    "görünebilmesi için ölçek logaritmik olabilir; bar uçlarındaki "
+                    "sayılar her zaman gerçek paket sayısıdır."
+                ),
+                image=img,
+                table=table,
+                val_header="Paket Sayısı",
+            )
+        )
+
+    # 2. Katman Bazlı Protokol Dağılımı
+    # Protokol grafiğinin hemen ardında: o grafik her paketi yalnızca en
+    # üst katmanıyla sayar, bu grafik ise üç katmanın her birini ayrı ayrı
+    # gösterir (bkz. ChartBuilder.layered_protocol_chart).
+    img, table = chart_builder.layered_protocol_chart(
+        statistics.network_protocol_distribution,
+        statistics.transport_protocol_distribution,
+        statistics.application_protocol_distribution,
+    )
+    if img:
+        charts.append(
+            ChartSection(
+                id="layered_protocol_distribution",
+                title="Katman Bazlı Protokol Dağılımı",
+                description=(
+                    "Ağ, taşıma ve uygulama katmanlarının her biri ayrı ayrı. Bir üstteki "
+                    "grafik her paketi yalnızca en üst katmanıyla saydığı için, örneğin "
+                    "TLS paketlerinin aynı zamanda TCP paketi olduğu orada görünmez. "
+                    "Uygulama katmanındaki \"Belirlenemedi\" satırı, protokolü tespit "
+                    "edilemeyen paketleri gösterir."
+                ),
+                image=img,
+                table=table,
+                val_header="Paket Sayısı",
+            )
+        )
+
+    # 3. Top Talkers
+    img, table = chart_builder.top_hosts_chart(
+        statistics.top_source_ips,
+        "En Aktif Hostlar (Top Talkers)",
+        "Paket Sayısı",
+        hostname_map=statistics.ip_hostname_map,
+    )
+    if img:
+        charts.append(
+            ChartSection(
+                id="top_talkers",
+                title="En Aktif Hostlar (Top Talkers)",
+                description="Ağ üzerinde en yüksek miktarda paket üreten/gönderen kaynak IP adresleri.",
+                image=img,
+                table=table,
+                val_header="Paket Sayısı",
+            )
+        )
+
+    # 3. Top Bandwidth Hosts
+    img, table = chart_builder.top_hosts_chart(
+        statistics.top_bandwidth_hosts,
+        "En Yüksek Bant Genişliği Kullananlar",
+        "Boyut",
+        value_formatter=_format_bytes,
+        hostname_map=statistics.ip_hostname_map,
+    )
+    if img:
+        charts.append(
+            ChartSection(
+                id="top_bandwidth_hosts",
+                title="En Yüksek Bant Genişliği Kullananlar",
+                description="Toplam veri aktarım hacmi açısından ağ bant genişliğini en çok tüketen hostlar.",
+                image=img,
+                table=table,
+                val_header="Toplam Boyut",
+            )
+        )
+
+    # 4. TCP Port Dağılımı
+    img, table = chart_builder.port_distribution_chart(
+        dict(statistics.top_tcp_ports),
+        title=f"TCP Port Dağılımı (İlk {config.TOP_N_PORTS})",
+    )
+    if img:
+        charts.append(
+            ChartSection(
+                id="port_distribution",
+                title="TCP Port Dağılımı",
+                description="Trafikte en sık hedef alınan ve kullanılan ilk TCP portlarının paket yoğunluğu.",
+                image=img,
+                table=table,
+                val_header="Paket Sayısı",
+            )
+        )
+
+    # 5. UDP Port Dağılımı
+    # `top_udp_ports` istatistik motorunda hesaplanıyordu ama rapora hiç
+    # girmiyordu: DNS, DHCP, NTP ve günümüzde web trafiğinin büyük
+    # bölümünü taşıyan QUIC/HTTP3 UDP üzerinde koşar, dolayısıyla yalnızca
+    # TCP portlarını göstermek capture'ın önemli bir kısmını görünmez
+    # bırakıyordu.
+    img, table = chart_builder.port_distribution_chart(
+        dict(statistics.top_udp_ports),
+        title=f"UDP Port Dağılımı (İlk {config.TOP_N_PORTS})",
+        color="#7c3aed",
+    )
+    if img:
+        charts.append(
+            ChartSection(
+                id="udp_port_distribution",
+                title="UDP Port Dağılımı",
+                description=(
+                    "UDP üzerinde en sık görülen portlar (DNS, DHCP, NTP, QUIC/HTTP3 vb.) "
+                    "ve paket yoğunlukları."
+                ),
+                image=img,
+                table=table,
+                val_header="Paket Sayısı",
+            )
+        )
+
+    # 6. Zaman Çizelgesi
+    img, table = chart_builder.timeline_chart(statistics.timeline)
+    if img:
+        charts.append(
+            ChartSection(
+                id="timeline",
+                title="Zaman Çizelgesi (Paket Trafiği)",
+                description=(
+                    "Analiz edilen zaman aralığı boyunca ağ trafiğinde meydana gelen "
+                    "anlık yoğunlaşma ve dalgalanmalar."
+                ),
+                image=img,
+                table=table,
+                val_header="Paket Sayısı",
+            )
+        )
+
+    return charts
+
+
 class Reporter:
     """Analiz sonuçlarını tek dosyalık, offline HTML rapora dönüştürür.
 
@@ -1083,6 +1250,7 @@ class Reporter:
         threat_intel: dict[str, list[NormalizedIOCResult]],
         source_file: Path,
         analysis_duration: float,
+        sha256: str | None = None,
     ) -> Path:
         """Analiz sonuçlarından tek dosyalık HTML rapor üretir.
 
@@ -1093,6 +1261,11 @@ class Reporter:
             threat_intel: Threat Intel modülünden gelen IOC sonuçları.
             source_file: Analiz edilen PCAP kaynak dosya yolu.
             analysis_duration: Analiz süresi (saniye cinsinden).
+            sha256: Kaynak dosyanın önceden hesaplanmış SHA-256 özeti.
+                Verilmezse burada hesaplanır. Parametre, aynı çalıştırmada
+                hem HTML raporu hem de JSON/CSV/PDF export'ları üretilirken
+                GB boyutundaki bir delil dosyasının iki kez baştan sona
+                okunmasını önlemek için vardır (bkz. main.py).
 
         Returns:
             Yazılan rapor dosyasının ``Path`` nesnesi.
@@ -1105,15 +1278,13 @@ class Reporter:
         metadata = ReportMetadata(
             source_file=source_file.name,
             analysis_duration_seconds=analysis_duration,
-            sha256=_compute_sha256(source_file),
+            sha256=sha256 if sha256 is not None else _compute_sha256(source_file),
         )
 
-        # Girdi dosyasının üst klasör ismine göre hedef klasörü seç (clean / malicious)
-        parent_folder_name = source_file.parent.name.lower()
-        category_dir = parent_folder_name if parent_folder_name in {"clean", "malicious"} else "clean"
-
-        reports_dir = config.REPORTS_DIR / category_dir
-        output_path = reports_dir / f"{source_file.stem}_report.html"
+        # Çıktı klasörü (clean / malicious) capture'ın üst klasöründen türetilir.
+        # Kural export katmanıyla PAYLAŞILIR (modules/output_paths.py): aynı
+        # capture'ın HTML raporu ile JSON/CSV/PDF çıktıları aynı klasöre düşmeli.
+        output_path = resolve_output_dir(source_file) / f"{source_file.stem}_report.html"
 
         logger.info(
             "Generating report for %s (%d packets)...",
@@ -1160,158 +1331,8 @@ class Reporter:
         return output_path
 
     def _build_charts_list(self, statistics: GeneralStatistics) -> list[ChartSection]:
-        """Tüm grafikleri ve bunlara ait analist detay tablolarını tek bir listede toplar."""
-        charts: list[ChartSection] = []
-
-        # 1. Protokol Dağılımı
-        img, table = self._chart_builder.protocol_distribution_chart(
-            statistics.protocol_distribution
-        )
-        if img:
-            charts.append(
-                ChartSection(
-                    id="protocol_distribution",
-                    title="Protokol Dağılımı",
-                    description=(
-                        "Yakalanan her paket, tespit edilebilen en üst katmanın protokolüyle "
-                        "tam olarak bir kez sayılır (uygulama → taşıma → ağ katmanı). Tek bir "
-                        "protokolün baskın olduğu capture'larda küçük protokollerin de "
-                        "görünebilmesi için ölçek logaritmik olabilir; bar uçlarındaki "
-                        "sayılar her zaman gerçek paket sayısıdır."
-                    ),
-                    image=img,
-                    table=table,
-                    val_header="Paket Sayısı",
-                )
-            )
-
-        # 2. Katman Bazlı Protokol Dağılımı
-        # Protokol grafiğinin hemen ardında: o grafik her paketi yalnızca en
-        # üst katmanıyla sayar, bu grafik ise üç katmanın her birini ayrı ayrı
-        # gösterir (bkz. ChartBuilder.layered_protocol_chart).
-        img, table = self._chart_builder.layered_protocol_chart(
-            statistics.network_protocol_distribution,
-            statistics.transport_protocol_distribution,
-            statistics.application_protocol_distribution,
-        )
-        if img:
-            charts.append(
-                ChartSection(
-                    id="layered_protocol_distribution",
-                    title="Katman Bazlı Protokol Dağılımı",
-                    description=(
-                        "Ağ, taşıma ve uygulama katmanlarının her biri ayrı ayrı. Bir üstteki "
-                        "grafik her paketi yalnızca en üst katmanıyla saydığı için, örneğin "
-                        "TLS paketlerinin aynı zamanda TCP paketi olduğu orada görünmez. "
-                        "Uygulama katmanındaki \"Belirlenemedi\" satırı, protokolü tespit "
-                        "edilemeyen paketleri gösterir."
-                    ),
-                    image=img,
-                    table=table,
-                    val_header="Paket Sayısı",
-                )
-            )
-
-        # 3. Top Talkers
-        img, table = self._chart_builder.top_hosts_chart(
-            statistics.top_source_ips,
-            "En Aktif Hostlar (Top Talkers)",
-            "Paket Sayısı",
-            hostname_map=statistics.ip_hostname_map,
-        )
-        if img:
-            charts.append(
-                ChartSection(
-                    id="top_talkers",
-                    title="En Aktif Hostlar (Top Talkers)",
-                    description="Ağ üzerinde en yüksek miktarda paket üreten/gönderen kaynak IP adresleri.",
-                    image=img,
-                    table=table,
-                    val_header="Paket Sayısı",
-                )
-            )
-
-        # 3. Top Bandwidth Hosts
-        img, table = self._chart_builder.top_hosts_chart(
-            statistics.top_bandwidth_hosts,
-            "En Yüksek Bant Genişliği Kullananlar",
-            "Boyut",
-            value_formatter=_format_bytes,
-            hostname_map=statistics.ip_hostname_map,
-        )
-        if img:
-            charts.append(
-                ChartSection(
-                    id="top_bandwidth_hosts",
-                    title="En Yüksek Bant Genişliği Kullananlar",
-                    description="Toplam veri aktarım hacmi açısından ağ bant genişliğini en çok tüketen hostlar.",
-                    image=img,
-                    table=table,
-                    val_header="Toplam Boyut",
-                )
-            )
-
-        # 4. TCP Port Dağılımı
-        img, table = self._chart_builder.port_distribution_chart(
-            dict(statistics.top_tcp_ports),
-            title=f"TCP Port Dağılımı (İlk {config.TOP_N_PORTS})",
-        )
-        if img:
-            charts.append(
-                ChartSection(
-                    id="port_distribution",
-                    title="TCP Port Dağılımı",
-                    description="Trafikte en sık hedef alınan ve kullanılan ilk TCP portlarının paket yoğunluğu.",
-                    image=img,
-                    table=table,
-                    val_header="Paket Sayısı",
-                )
-            )
-
-        # 5. UDP Port Dağılımı
-        # `top_udp_ports` istatistik motorunda hesaplanıyordu ama rapora hiç
-        # girmiyordu: DNS, DHCP, NTP ve günümüzde web trafiğinin büyük
-        # bölümünü taşıyan QUIC/HTTP3 UDP üzerinde koşar, dolayısıyla yalnızca
-        # TCP portlarını göstermek capture'ın önemli bir kısmını görünmez
-        # bırakıyordu.
-        img, table = self._chart_builder.port_distribution_chart(
-            dict(statistics.top_udp_ports),
-            title=f"UDP Port Dağılımı (İlk {config.TOP_N_PORTS})",
-            color="#7c3aed",
-        )
-        if img:
-            charts.append(
-                ChartSection(
-                    id="udp_port_distribution",
-                    title="UDP Port Dağılımı",
-                    description=(
-                        "UDP üzerinde en sık görülen portlar (DNS, DHCP, NTP, QUIC/HTTP3 vb.) "
-                        "ve paket yoğunlukları."
-                    ),
-                    image=img,
-                    table=table,
-                    val_header="Paket Sayısı",
-                )
-            )
-
-        # 6. Zaman Çizelgesi
-        img, table = self._chart_builder.timeline_chart(statistics.timeline)
-        if img:
-            charts.append(
-                ChartSection(
-                    id="timeline",
-                    title="Zaman Çizelgesi (Paket Trafiği)",
-                    description=(
-                        "Analiz edilen zaman aralığı boyunca ağ trafiğinde meydana gelen "
-                        "anlık yoğunlaşma ve dalgalanmalar."
-                    ),
-                    image=img,
-                    table=table,
-                    val_header="Paket Sayısı",
-                )
-            )
-
-        return charts
+        """Grafik bölümlerini üretir (bkz. modül seviyesindeki build_chart_sections)."""
+        return build_chart_sections(statistics, self._chart_builder)
 
     def _render(
         self,
