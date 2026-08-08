@@ -12,6 +12,8 @@
 
 ## The Report
 
+> **The generated reports are in Turkish.** This README, the API and the code identifiers are English; the analyst-facing output — report headings, finding descriptions, verdict labels — is Turkish, as are the code comments and docstrings. That is a deliberate convention, not an oversight, and the [verdict labels are translated below](#threat-intelligence-verdicts) so the screenshots and outputs stay readable either way.
+
 A single self-contained HTML file — no external references, no internet required. Every screenshot below is generated from the demo capture in this repository:
 
 ```bash
@@ -155,6 +157,21 @@ Two design rules run through all of them:
 
 **Machine formats carry raw data; human formats carry presentation.** JSON and CSV keep every finding as its own record and every timestamp as a raw epoch value. The HTML and PDF reports collapse repeated detections of the same rule into one row and format times for reading. A grouped row can't be un-grouped, so the lossless representation is the one that gets exported.
 
+### Threat Intelligence verdicts
+
+Each enriched IP gets one consensus verdict, derived in a single place (`reporter._prepare_threat_intel_for_template`) and reused by every output format, so the HTML report and the PDF can never disagree about the same address:
+
+| Label (as printed) | Meaning |
+| --- | --- |
+| `ZARARLI` | Malicious — every provider that answered crossed its threshold |
+| `ÇELİŞKİLİ` | Conflicting — some providers say malicious, others do not |
+| `ŞÜPHELİ` | Suspicious — nobody crossed a threshold, but at least one provider returned a **non-zero** score |
+| `KISMİ TEMİZ` | Partially clean — those that answered said clean, but some never answered |
+| `VERİ YOK` | No data — no provider could render a verdict |
+| `TEMİZ` | Clean — every provider answered and every score was zero |
+
+`ŞÜPHELİ` exists because thresholds created a state that would otherwise be mislabelled: all three providers answer, none crosses its threshold, but one returns 2/94 engines. Printing "clean — all providers agree" there would assert more than the data supports, since no provider actually said clean.
+
 **A provider that couldn't answer is never counted as "clean".** `is_malicious` is tri-state, and it stays tri-state in every format: `true` / `false` / `null` in JSON, `true` / `false` / `unknown` in CSV (never a blank cell, which reads as "false"), and "no verdict" in the PDF. The per-IP consensus is computed in one place (`reporter._prepare_threat_intel_for_template`) and reused by every format, so the HTML report and the PDF can't disagree about the same IP.
 
 CSV is split across three files because a single CSV is one flat table, and findings/threat-intel/statistics have three different shapes. The statistics file uses a long/tidy layout (`category,key,value`) so that scalar totals, protocol distributions, top-N lists and the timeline all fit one schema.
@@ -236,6 +253,7 @@ Automated-PCAP-Forensic/
 ├── .github/workflows/       # CI: ruff + pip-audit + pytest + docker build on every push
 ├── Dockerfile               # multi-stage build, non-root runtime
 ├── .dockerignore            # keeps evidence and .env out of the build context
+├── .gitattributes           # LF for text, binary for captures (a CRLF rewrite would corrupt evidence)
 ├── config.py                # thresholds, windows, paths, API config
 ├── main.py                  # CLI entry point / pipeline orchestration
 ├── pyproject.toml           # ruff / pytest / coverage configuration

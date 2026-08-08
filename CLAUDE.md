@@ -36,6 +36,8 @@ docker run --rm -v "$PWD/reports:/app/reports" pcap-forensic \
 
 Coverage sources are configured in `pyproject.toml` (`source = ["."]` plus omits). Do **not** revert to `--cov=modules --cov=main`: `main` does not resolve as a module name there, so `main.py` silently dropped out of the report entirely — an uncovered file that simply isn't listed reads as if it were covered.
 
+`SECURITY.md` states the threat model (the capture file is untrusted input) and the vulnerability reporting route; `.gitattributes` forces LF for text but marks `*.pcap*`/`*.png`/`*.pdf` **binary** — a line-ending rewrite would corrupt a capture and change the SHA-256 that the report prints as its chain-of-custody digest.
+
 `pyproject.toml` configures ruff, pytest and coverage (it is **not** a packaging manifest — dependencies live in `requirements.txt` / `requirements-dev.txt`). Two ruff decisions there are deliberate and should not be "fixed": `RUF001/002/003` (ambiguous-unicode) are ignored because the Turkish docstrings/comments trigger 1600+ false positives, and `UP042` is ignored because switching `class X(str, Enum)` to `StrEnum` would change what `str(member)` returns — the report template relies on the current behaviour via `finding.severity|string`. `ruff format` has **not** been applied to the codebase, so CI runs `ruff check` only.
 
 ## Docker
