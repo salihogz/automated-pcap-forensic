@@ -63,13 +63,21 @@ pip install -r requirements.txt -r requirements-dev.txt   # + tests & linting
 
 ### API keys (optional)
 
-Threat intelligence enrichment reads its keys from a `.env` file in the project root. A provider with no key configured is **skipped**, not treated as an error — the tool runs fine with no `.env` at all, it just won't enrich IPs.
+Threat intelligence enrichment reads its keys from a `.env` file in the project root. Start from the tracked template:
+
+```bash
+cp .env.example .env    # then fill in the keys you have
+```
 
 ```dotenv
 VT_API_KEY=your_virustotal_key
 ABUSEIPDB_API_KEY=your_abuseipdb_key
 OTX_API_KEY=your_otx_key
 ```
+
+A provider with no key configured is **skipped**, not treated as an error — the tool runs fine with no `.env` at all, it just won't enrich IPs. Free tiers are enough to try it: VirusTotal gives 500 lookups/day, AbuseIPDB 1000 checks/day.
+
+`.env` is gitignored; `.env.example` is the tracked template and must never contain a real key.
 
 ---
 

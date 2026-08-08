@@ -15,6 +15,10 @@ __pycache__/
 # ==========================
 # Environment Variables
 # ==========================
+# Gerçek API anahtarlarını taşır, ASLA commit'lenmez. Bu desen yalnızca
+# ".env" adının kendisiyle eşleşir; anahtarsız şablon olan ".env.example"
+# bilinçli olarak depoda TUTULUR (kullanıcı `cp .env.example .env` ile
+# başlıyor). Şablona gerçek bir anahtar yazılmamalıdır.
 .env
 
 # ==========================
