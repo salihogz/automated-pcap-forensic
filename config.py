@@ -14,7 +14,7 @@ LOGS_DIR = BASE_DIR / "logs"
 # reporter.py "1.2.0-forensic"); rapordaki "Araç Sürümü" alanı adli bir
 # belgede yer aldığı için hangi sürümün üretildiği tek bir yerden
 # okunabilmelidir.
-TOOL_VERSION = "1.2.0"
+TOOL_VERSION = "1.3.0"
 
 # ==========================
 # General Statistics

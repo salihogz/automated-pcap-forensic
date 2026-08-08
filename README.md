@@ -84,16 +84,43 @@ python main.py
 
 # DEBUG-level logging
 python main.py -v
+
+# Additional output formats (see "Output formats" below)
+python main.py --format json
+python main.py --format html json pdf
+python main.py --format all
 ```
 
 | Flag | Description |
 | --- | --- |
 | `-f`, `--file` | Path to the PCAP/PCAPNG file to analyze |
 | `-v`, `--verbose` | Enable DEBUG-level logging |
+| `--format` | Output formats to produce: `html`, `json`, `csv`, `pdf`, or `all`. Multiple values allowed. Default: `html` |
 
-The HTML report is written to `reports/<clean|malicious>/<capture-name>_report.html`. The subfolder is derived from the capture's parent directory name (`samples/malicious/x.pcapng` → `reports/malicious/x_report.html`); anything else falls back to `clean/`.
+All outputs are written to `reports/<clean|malicious>/`. The subfolder is derived from the capture's parent directory name (`samples/malicious/x.pcapng` → `reports/malicious/`); anything else falls back to `clean/`.
 
-The report is fully self-contained — charts are embedded as base64, so it has **no external references** and can be opened offline on an air-gapped forensic workstation.
+The HTML report is fully self-contained — charts are embedded as base64, so it has **no external references** and can be opened offline on an air-gapped forensic workstation.
+
+---
+
+## Output formats
+
+| `--format` | Files produced | Intended consumer |
+| --- | --- | --- |
+| `html` | `<capture>_report.html` | An analyst reading the full report |
+| `json` | `<capture>_report.json` | A machine — SIEM ingest, correlation, diffing two analyses |
+| `csv` | `<capture>_findings.csv`, `<capture>_threat_intel.csv`, `<capture>_statistics.csv` | Excel/pivot tables, IOC lists, timeline tools |
+| `pdf` | `<capture>_report.pdf` | A printed/signed document for a case file |
+
+Two design rules run through all of them:
+
+**Machine formats carry raw data; human formats carry presentation.** JSON and CSV keep every finding as its own record and every timestamp as a raw epoch value. The HTML and PDF reports collapse repeated detections of the same rule into one row and format times for reading. A grouped row can't be un-grouped, so the lossless representation is the one that gets exported.
+
+**A provider that couldn't answer is never counted as "clean".** `is_malicious` is tri-state, and it stays tri-state in every format: `true` / `false` / `null` in JSON, `true` / `false` / `unknown` in CSV (never a blank cell, which reads as "false"), and "no verdict" in the PDF. The per-IP consensus is computed in one place (`reporter._prepare_threat_intel_for_template`) and reused by every format, so the HTML report and the PDF can't disagree about the same IP.
+
+CSV is split across three files because a single CSV is one flat table, and findings/threat-intel/statistics have three different shapes. The statistics file uses a long/tidy layout (`category,key,value`) so that scalar totals, protocol distributions, top-N lists and the timeline all fit one schema.
+
+The PDF is not a rendering of the HTML report — it is laid out for paper (A4, `Sayfa X / Y` footers so a missing page is detectable) and embeds DejaVu Sans, because ReportLab's built-in Helvetica has no `ğ ş ı İ` and would corrupt every Turkish label. The font ships with matplotlib, which is already a dependency, so the PDF needs no font assets of its own.
 
 ### The demo capture
 
@@ -121,6 +148,7 @@ Any other capture you drop under `samples/` is gitignored, so your own traffic n
     - AbuseIPDB
     - AlienVault OTX
 - HTML report generation
+- JSON / CSV / PDF export (see [Output formats](#output-formats))
 - Risk scoring
 - Environment-based API configuration (.env)
 - Comprehensive error handling
@@ -146,9 +174,9 @@ All thresholds and time windows are defined in `config.py`, which is the single 
 
 ## Technology Stack
 
-**Runtime:** Python 3.14 · Scapy · Requests · urllib3 · Matplotlib · Jinja2 · python-dotenv
+**Runtime:** Python 3.14 · Scapy · Requests · urllib3 · Matplotlib · Jinja2 · python-dotenv · ReportLab
 
-**Development:** Pytest · pytest-cov · BeautifulSoup4 (report DOM assertions) · Ruff · pip-audit
+**Development:** Pytest · pytest-cov · BeautifulSoup4 (report DOM assertions) · pypdf (PDF text assertions) · Ruff · pip-audit
 
 ---
 
@@ -157,9 +185,10 @@ All thresholds and time windows are defined in `config.py`, which is the single 
 ```
 Automated-PCAP-Forensic/
 ├── modules/                 # parser, statistics, threat_detector, threat_intel, reporter, models
+│   └── exporters/           # JSON / CSV / PDF export formats (shared ExportPayload)
 ├── templates/               # report.html.j2 (Jinja2 view layer)
 ├── tests/                   # pytest suite + snapshots/
-├── reports/                 # generated HTML reports (gitignored)
+├── reports/                 # generated reports & exports (gitignored)
 ├── samples/                 # captures (gitignored, except the synthetic demo)
 ├── scripts/                 # generate_sample_capture.py
 ├── docs/                    # README screenshots
@@ -185,8 +214,12 @@ PCAPParser.parse()           →  list[PacketInfo]
 build_general_statistics()   →  GeneralStatistics
 ThreatDetector.detect()      →  list[ThreatFinding]
 ThreatIntelService.enrich()  →  dict[str, list[NormalizedIOCResult]]   (parallel, public IPs only)
-Reporter.generate()          →  reports/<clean|malicious>/<name>_report.html
+        │
+        ├─ Reporter.generate()   →  reports/<clean|malicious>/<name>_report.html
+        └─ Exporter.export()     →  ...json / ...csv / ...pdf     (--format)
 ```
+
+The export formats all consume one `ExportPayload`, built once per run. That is what guarantees the SHA-256 of a multi-gigabyte capture is computed a single time instead of once per output, and that every format reports the same risk score.
 
 Data contracts live in `modules/models.py` and are shared across every stage. `PacketInfo` and `ThreatFinding` are frozen dataclasses — treated as immutable for chain-of-custody/data-integrity reasons.
 
@@ -201,6 +234,9 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 - Threat Detection
 - Threat Intelligence
 - HTML Reporter
+- JSON Export
+- CSV Export
+- PDF Export
 - Threat Intelligence Test Suite
 - Environment-based Configuration
 - Comprehensive Error Handling
@@ -208,9 +244,6 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 ### Planned
 
 - Additional Detection Rules
-- JSON Export
-- CSV Export
-- PDF Export
 - Docker Support
 - **Chunked processing for very large captures** — see below
 
@@ -229,17 +262,22 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 250 / 250 tests passing · **93%** total coverage (branch coverage enabled)
+**Current status:** 309 / 309 tests passing · **94%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
 | `config.py` | 100% |
+| `modules/exporters/base.py` | 100% |
+| `modules/output_paths.py` | 100% |
+| `main.py` | 97% |
+| `modules/reporter.py` | 97% |
 | `modules/threat_detector.py` | 97% |
-| `main.py` | 96% |
+| `modules/exporters/pdf_exporter.py` | 95% |
 | `modules/models.py` | 94% |
-| `modules/statistics.py` | 93% |
+| `modules/statistics.py` | 94% |
 | `modules/parser.py` | 92% |
-| `modules/reporter.py` | 91% |
+| `modules/exporters/csv_exporter.py` | 91% |
+| `modules/exporters/json_exporter.py` | 88% |
 | `modules/threat_intel.py` | 86% |
 
 `modules/threat_intel.py` is the lowest — its uncovered lines are mostly provider-specific HTTP error branches. The remaining gaps in `parser.py` are the module-level `ImportError` fallbacks for optional Scapy TLS/HTTP layers, which cannot be exercised without breaking the Scapy install.
