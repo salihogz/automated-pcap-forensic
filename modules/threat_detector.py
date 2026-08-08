@@ -7,6 +7,7 @@ Kural tabanlı tehdit tespit motoru.
 import ipaddress
 import logging
 import math
+from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from typing import cast
@@ -52,6 +53,7 @@ class ThreatDetector:
 
         findings.extend(self._detect_port_scan(packet_list))
         findings.extend(self._detect_syn_scan(packet_list))
+        findings.extend(self._detect_syn_flood(packet_list))
         findings.extend(self._detect_icmp_flood(packet_list))
         findings.extend(self._detect_failed_tcp_connections(packet_list))
         findings.extend(self._detect_dns_tunneling(packet_list))
@@ -433,6 +435,87 @@ class ThreatDetector:
         logger.info("SYN Scan kuralı tamamlandı. %d bulgu üretildi.", len(findings))
         return findings
 
+    def _detect_syn_flood(self, packets: list[PacketInfo]) -> list[ThreatFinding]:
+        """Tek bir hedef servise yönelen hacimsel SYN yoğunluğunu tespit eder.
+
+        NEDEN AYRI BİR KURAL: Mevcut kuralların hiçbiri bu senaryoyu görmüyordu.
+        `_detect_syn_scan` tek kaynaktan ÇOK SAYIDA FARKLI PORTA bakar; flood
+        ise TEK PORTA yığılır, dolayısıyla o kuralın eşiğini hiç zorlamaz.
+        `_detect_failed_tcp_connections` ise yalnızca YANITSIZ SYN'leri sayar;
+        hedef SYN-ACK ile cevap veriyorsa (yani sunucu ayaktayken yapılan
+        sıradan bir flood) hiçbir SYN "başarısız" görünmez. Sonuç, saniyede
+        yüzlerce SYN alan bir servisin raporda hiç yer almamasıydı.
+
+        HEDEFE göre gruplanır (kaynağa değil): flood'larda kaynak IP'ler
+        genellikle sahtedir (spoofed) ve her paket farklı bir kaynaktan
+        geliyormuş gibi görünür; kaynağa göre gruplamak saldırıyı binlerce
+        tek paketlik kovaya bölerek görünmez kılardı.
+        """
+        logger.info("SYN Flood kuralı çalıştırılıyor...")
+        findings: list[ThreatFinding] = []
+
+        time_window = config.SYN_FLOOD_TIME_WINDOW_SECONDS
+        threshold = config.SYN_FLOOD_PACKET_THRESHOLD
+
+        # (dst_ip, dst_port) -> saf SYN paketleri
+        target_buckets: dict[tuple[str, int], list[PacketInfo]] = defaultdict(list)
+
+        for pkt in packets:
+            if (
+                pkt.transport_protocol == "TCP"
+                and pkt.tcp_flags == "S"
+                and pkt.dst_ip
+                and pkt.dst_port
+                and pkt.epoch_time > 0
+            ):
+                target_buckets[(pkt.dst_ip, pkt.dst_port)].append(pkt)
+
+        for (dst_ip, dst_port), syn_pkts in target_buckets.items():
+            if len(syn_pkts) < threshold:
+                continue
+
+            sorted_pkts = sorted(syn_pkts, key=lambda p: p.epoch_time)
+
+            for left, right in self._slide_count_windows(sorted_pkts, time_window, threshold):
+                window_pkts = sorted_pkts[left:right]
+                count = len(window_pkts)
+                sources = {p.src_ip for p in window_pkts if p.src_ip}
+                first_seen = window_pkts[0].epoch_time
+                last_seen = window_pkts[-1].epoch_time
+
+                # Tek kaynaklı bir flood'da o kaynağı adlandırmak analiste
+                # doğrudan bir pivot noktası verir; çok kaynaklıda "VARIOUS"
+                # yazmak, uydurma bir tekil kaynak göstermekten dürüsttür.
+                source = next(iter(sources)) if len(sources) == 1 else "VARIOUS"
+
+                findings.append(
+                    ThreatFinding(
+                        rule_id="SEC-SYN-FLOOD-001",
+                        title="TCP SYN Flood Saldırısı Tespiti",
+                        severity=ThreatSeverity.HIGH,
+                        description=(
+                            f"{dst_ip}:{dst_port} hedefine {time_window} saniye içinde "
+                            f"{count} adet TCP SYN paketi gönderildi "
+                            f"({len(sources)} farklı kaynak IP)."
+                        ),
+                        evidence={
+                            "packet_count": count,
+                            "distinct_source_count": len(sources),
+                            "target_port": dst_port,
+                            "time_window_seconds": time_window,
+                            "first_seen_epoch": first_seen,
+                            "last_seen_epoch": last_seen,
+                            "sampled_sources": sorted(sources)[:10],
+                        },
+                        source=source,
+                        destination=dst_ip,
+                        timestamp=first_seen,
+                    )
+                )
+
+        logger.info("SYN Flood kuralı tamamlandı. %d bulgu üretildi.", len(findings))
+        return findings
+
     def _detect_icmp_flood(self, packets: list[PacketInfo]) -> list[ThreatFinding]:
         """ICMP Flood DoS/DDoS saldırılarını tespit eder."""
         logger.info("ICMP Flood kuralı çalıştırılıyor...")
@@ -508,29 +591,60 @@ class ThreatDetector:
         return (endpoint_a, endpoint_b) if endpoint_a <= endpoint_b else (endpoint_b, endpoint_a)
 
     @classmethod
-    def _collect_answered_connections(
+    def _collect_syn_ack_times(
         cls, packets: list[PacketInfo]
-    ) -> set[tuple[tuple[str, int], tuple[str, int]]]:
-        """SYN-ACK ile yanıtlanmış bağlantıların kanonik anahtar kümesini üretir.
+    ) -> dict[tuple[tuple[str, int], tuple[str, int]], list[float]]:
+        """Bağlantı anahtarı -> SYN-ACK zamanları (artan sırada) haritası üretir.
+
+        Küme değil ZAMAN LİSTESİ tutulur, çünkü "bu bağlantı yanıtlandı mı"
+        sorusu zamandan bağımsız sorulamaz: ephemeral portlar çekirdek
+        tarafından geri dönüşüme sokulduğu için aynı 4'lü capture içinde
+        birden çok kez, farklı sonuçlarla görülebilir (bkz.
+        `config.FAILED_TCP_HANDSHAKE_TIMEOUT_SECONDS`).
 
         Yalnızca SYN-ACK "başarılı yanıt" sayılır. RST ile reddedilen bir
         bağlantı bilinçli olarak BAŞARISIZ kabul edilir: port taramasının
-        tipik imzası tam olarak budur (SYN -> RST), ve bir analistin görmek
+        tipik imzası tam olarak budur (SYN -> RST) ve analistin görmek
         isteyeceği şey de odur.
         """
-        answered: set[tuple[tuple[str, int], tuple[str, int]]] = set()
+        syn_ack_times: dict[tuple[tuple[str, int], tuple[str, int]], list[float]] = defaultdict(list)
         for packet in packets:
             flags = packet.tcp_flags or ""
             if packet.transport_protocol == "TCP" and "S" in flags and "A" in flags:
-                answered.add(cls._connection_key(packet))
-        return answered
+                syn_ack_times[cls._connection_key(packet)].append(packet.epoch_time)
+
+        for times in syn_ack_times.values():
+            times.sort()
+        return syn_ack_times
+
+    @staticmethod
+    def _is_answered_within_timeout(
+        syn_time: float, syn_ack_times: list[float], timeout: int
+    ) -> bool:
+        """SYN'den SONRA ve zaman aşımı içinde bir SYN-ACK var mı?
+
+        `bisect_left` ile O(log n): bir 4'lü için yüzlerce SYN-ACK
+        birikebileceğinden (uzun capture'larda port yeniden kullanımı) doğrusal
+        arama, kuralın tamamını ikinci dereceden maliyete taşırdı.
+        """
+        index = bisect_left(syn_ack_times, syn_time)
+        return index < len(syn_ack_times) and syn_ack_times[index] <= syn_time + timeout
 
     def _detect_failed_tcp_connections(self, packets: list[PacketInfo]) -> list[ThreatFinding]:
         """Yanıtlanmamış TCP bağlantı denemelerinin yoğunlaştığı pencereleri tespit eder.
 
-        "Başarısız" tanımı: gönderilmiş bir SYN'e capture'ın TAMAMI içinde
-        karşılık gelen bir SYN-ACK bulunmaması. RST ile reddedilenler de
-        başarısız sayılır -- SYN -> RST, port taramasının tipik imzasıdır.
+        "Başarısız" tanımı: gönderilmiş bir SYN'e, `config.
+        FAILED_TCP_HANDSHAKE_TIMEOUT_SECONDS` içinde karşılık gelen bir
+        SYN-ACK ulaşmaması. RST ile reddedilenler de başarısız sayılır --
+        SYN -> RST, port taramasının tipik imzasıdır.
+
+        Sayılan birim PAKET DEĞİL BAĞLANTIDIR: yeniden gönderilen SYN'ler tek
+        bir denemeye indirgenir (bkz. metot gövdesindeki açıklama).
+
+        BİLİNEN KAPSAM SINIRI: hedefin YANIT VERDİĞİ hacimsel bir SYN flood bu
+        kuralın kapsamına girmez -- her SYN yanıtlandığı için hiçbiri
+        "başarısız" değildir. Bu senaryo `_detect_syn_flood` tarafından,
+        kaynağa değil HEDEFE göre gruplanarak ayrıca ele alınır.
 
         Bir SYN ile ona ait SYN-ACK zıt yönlerde aktığı için eşleştirme,
         IP çifti kovalarından bağımsız, yön duyarsız bir bağlantı anahtarı
@@ -560,8 +674,8 @@ class ThreatDetector:
             ):
                 ip_pair_buckets[(pkt.src_ip, pkt.dst_ip)].append(pkt)
 
-        # Yanıtlanmış bağlantılar, IP ÇİFTİ KOVALARINDAN BAĞIMSIZ olarak, tüm
-        # paketler üzerinden tek bir geçişte toplanır.
+        # Yanıt zamanları, IP ÇİFTİ KOVALARINDAN BAĞIMSIZ olarak, tüm paketler
+        # üzerinden tek bir geçişte toplanır.
         #
         # NEDEN BÖYLE OLMAK ZORUNDA: Bir SYN istemciden sunucuya, ona karşılık
         # gelen SYN-ACK ise sunucudan istemciye gider. Kovalar (src_ip, dst_ip)
@@ -573,17 +687,38 @@ class ThreatDetector:
         # servis) MEDIUM bulgu üretiyordu. Doğrulandı: 25 paket alışverişi tam
         # ve başarılı el sıkışma "25 adet başarısız TCP bağlantı denemesi"
         # olarak raporlanıyordu.
-        answered_connections = self._collect_answered_connections(packets)
+        syn_ack_times = self._collect_syn_ack_times(packets)
+        handshake_timeout = config.FAILED_TCP_HANDSHAKE_TIMEOUT_SECONDS
 
         for (src_ip, dst_ip), tcp_pkts in ip_pair_buckets.items():
             # Yalnızca saf SYN (el sıkışmanın ilk adımı) bir "deneme"dir;
             # SYN-ACK zaten yanıtın kendisidir.
-            failed_syn_pkts = [
-                pkt
-                for pkt in tcp_pkts
-                if pkt.tcp_flags == "S"
-                and self._connection_key(pkt) not in answered_connections
-            ]
+            #
+            # BAĞLANTI BAŞINA TEK KAYIT: TCP, yanıt alamadığı bir SYN'i aynı
+            # 4'lü üzerinden defalarca yeniden gönderir (Linux varsayılanı
+            # tcp_syn_retries=6 -> t=0,1,3,7,15,31,63 sn). Her retransmission
+            # ayrı bir "deneme" sayılırsa TEK bir başarısız bağlantı 6-7 kez
+            # sayılır: güvenlik duvarı tarafından sessizce düşürülen bir
+            # servise 4 soket açan sıradan bir istemci, 24 paketle 20'lik eşiği
+            # aşıp MEDIUM bulgu üretirdi. Bulgunun "24 adet başarısız bağlantı
+            # denemesi" iddiası da gerçekle örtüşmezdi -- gerçek sayı 4'tü.
+            # Bağlantı başına EN ERKEN SYN temsilci alınır.
+            earliest_syn_per_connection: dict[
+                tuple[tuple[str, int], tuple[str, int]], PacketInfo
+            ] = {}
+            for pkt in tcp_pkts:
+                if pkt.tcp_flags != "S":
+                    continue
+                key = self._connection_key(pkt)
+                if self._is_answered_within_timeout(
+                    pkt.epoch_time, syn_ack_times.get(key, []), handshake_timeout
+                ):
+                    continue
+                existing = earliest_syn_per_connection.get(key)
+                if existing is None or pkt.epoch_time < existing.epoch_time:
+                    earliest_syn_per_connection[key] = pkt
+
+            failed_syn_pkts = list(earliest_syn_per_connection.values())
 
             if len(failed_syn_pkts) < threshold:
                 continue

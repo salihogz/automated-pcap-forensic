@@ -59,6 +59,38 @@ ICMP_FLOOD_PACKET_THRESHOLD: int = 100
 FAILED_TCP_TIME_WINDOW_SECONDS: int = 60
 FAILED_TCP_ATTEMPT_THRESHOLD: int = 20
 
+# Bir SYN'in "yanıtlanmış" sayılması için SYN-ACK'in gelmesi gereken süre.
+#
+# NEDEN SÜRE SINIRI GEREKLİ: Yanıtlar süresiz aranırsa, aynı 4'lü (kaynak IP,
+# kaynak port, hedef IP, hedef port) sonradan yeniden kullanıldığında -- çekirdek
+# ephemeral portları geri dönüşüme sokar -- ikinci bağlantının SYN-ACK'i,
+# saatler önceki YANITSIZ bir SYN'i geçmişe dönük "yanıtlanmış" gösterir ve
+# kanıt sessizce kaybolur. Tersi de olur: capture'ın başındaki başarılı bir
+# bağlantı, aynı 4'lü üzerinde çok sonra gerçekleşen gerçek bir başarısızlığı
+# gizler.
+#
+# 10 saniye, gerçek bir TCP el sıkışması için fazlasıyla cömerttir (RTT
+# milisaniye mertebesindedir; uydu bağlantılarında bile bir saniyenin
+# altındadır), ama port yeniden kullanımının pratikte gerçekleşebileceği
+# süreden kısadır.
+FAILED_TCP_HANDSHAKE_TIMEOUT_SECONDS: int = 10
+
+# --------------------------------------------------------------------
+# Threat Detection: SYN Flood (hacimsel)
+# --------------------------------------------------------------------
+# Tek bir hedef servise (IP + port) kısa sürede yönelen SYN yoğunluğu.
+#
+# SEC-SYN-SCAN-001'den FARKI: tarama kuralı tek kaynaktan ÇOK SAYIDA FARKLI
+# PORTA bakar; flood ise TEK BİR PORTA çok sayıda SYN gönderir, üstelik
+# kaynak IP'ler sahte (spoofed) olabileceği için kaynağa göre değil HEDEFE
+# göre gruplanmalıdır. Bu yüzden iki kural birbirini kapsamaz.
+#
+# Eşik bilinçli olarak yüksek: meşru trafikte (yük testi, bir haber sitesinin
+# açılışında onlarca paralel bağlantı) saniyede onlarca SYN olağandır;
+# saniyede 50+ SYN aynı servise, kaba kuvvet ya da hacimsel saldırı işaretidir.
+SYN_FLOOD_TIME_WINDOW_SECONDS: int = 10
+SYN_FLOOD_PACKET_THRESHOLD: int = 500
+
 DNS_TUNNEL_TIME_WINDOW_SECONDS: int = 60
 DNS_TUNNEL_QUERY_COUNT_THRESHOLD: int = 30
 DNS_TUNNEL_SUSPICIOUS_QTYPES: tuple[str, ...] = ("TXT", "NULL", "CNAME")

@@ -206,6 +206,125 @@ def test_failed_tcp_counts_only_the_unanswered_subset():
     assert findings[0].evidence["failed_attempt_count"] == 22
 
 
+def test_failed_tcp_collapses_syn_retransmissions_into_one_attempt():
+    """REGRESYON: yeniden gönderilen SYN'ler tek bir deneme sayılmalı.
+
+    TCP, yanıt alamadığı bir SYN'i aynı 4'lü üzerinden defalarca gönderir
+    (Linux tcp_syn_retries=6 -> t=0,1,3,7,15,31 sn). Her retransmission ayrı
+    "deneme" sayılınca, güvenlik duvarınca sessizce düşürülen bir servise 4
+    soket açan sıradan bir istemci 24 paketle 20'lik eşiği aşıyor ve bulgu
+    "24 adet başarısız bağlantı denemesi" diyordu -- gerçek sayı 4'tü.
+    """
+    packets = []
+    packet_id = 0
+    for connection in range(4):
+        src_port = 41000 + connection
+        for retry_offset in (0, 1, 3, 7, 15, 31):
+            packet_id += 1
+            packets.append(
+                _tcp(packet_id, 1000.0 + retry_offset, "10.0.0.5", "10.0.0.9", src_port, 445, "S")
+            )
+
+    assert _failed_tcp_findings(packets) == []
+
+
+def test_failed_tcp_still_counts_distinct_connections():
+    """Retransmission indirgemesi, gerçek ayrı bağlantıları gizlememeli."""
+    packets = [
+        _tcp(n, 1000.0 + n * 0.1, "10.0.0.5", "10.0.0.9", 42000 + n, 445 + n, "S")
+        for n in range(25)
+    ]
+
+    findings = _failed_tcp_findings(packets)
+
+    assert len(findings) == 1
+    assert findings[0].evidence["failed_attempt_count"] == 25
+
+
+def test_failed_tcp_answer_matching_is_time_aware():
+    """REGRESYON: sonraki bir SYN-ACK, önceki yanıtsız SYN'i temizlememeli.
+
+    Çekirdek ephemeral portları geri dönüşüme sokar; aynı 4'lü capture içinde
+    birden çok kez görülebilir. Zamandan bağımsız eşleştirmede, 5 dakika sonra
+    kurulan BAŞARILI bir bağlantının SYN-ACK'i, capture'ın başındaki yanıtsız
+    SYN'i geçmişe dönük "yanıtlanmış" gösteriyor ve kanıt sessizce düşüyordu.
+    """
+    detector = ThreatDetector()
+    packets = [
+        _tcp(1, 1000.0, "10.0.0.5", "10.0.0.9", 51000, 445, "S"),  # yanıtsız
+        _tcp(2, 1300.0, "10.0.0.5", "10.0.0.9", 51000, 445, "S"),  # port yeniden kullanımı
+        _tcp(3, 1300.1, "10.0.0.9", "10.0.0.5", 445, 51000, "SA"),
+    ]
+    key = detector._connection_key(packets[0])
+    syn_ack_times = detector._collect_syn_ack_times(packets)
+    timeout = config.FAILED_TCP_HANDSHAKE_TIMEOUT_SECONDS
+
+    assert detector._is_answered_within_timeout(1000.0, syn_ack_times[key], timeout) is False
+    assert detector._is_answered_within_timeout(1300.0, syn_ack_times[key], timeout) is True
+
+
+# --- SYN Flood Detection Testleri ---
+
+
+def test_syn_flood_detects_volumetric_burst_against_responsive_target():
+    """Hedef SYN-ACK ile cevap verse bile hacimsel flood yakalanmalı.
+
+    Bu senaryoyu hiçbir kural görmüyordu: SYN scan kuralı ÇOK SAYIDA FARKLI
+    PORTA bakar, flood ise tek porta yığılır; failed-TCP kuralı ise yalnızca
+    YANITSIZ SYN'leri sayar, burada hepsi yanıtlanıyor.
+    """
+    packets = []
+    packet_id = 0
+    for n in range(config.SYN_FLOOD_PACKET_THRESHOLD + 100):
+        src_port = 40000 + n
+        packet_id += 1
+        packets.append(
+            _tcp(packet_id, 1000.0 + n * 0.01, "10.0.0.5", "10.0.0.9", src_port, 443, "S")
+        )
+        packet_id += 1
+        packets.append(
+            _tcp(packet_id, 1000.0 + n * 0.01 + 0.001, "10.0.0.9", "10.0.0.5", 443, src_port, "SA")
+        )
+
+    findings = [f for f in ThreatDetector().detect(packets) if f.rule_id == "SEC-SYN-FLOOD-001"]
+
+    assert len(findings) == 1
+    assert findings[0].evidence["target_port"] == 443
+    assert findings[0].destination == "10.0.0.9"
+
+
+def test_syn_flood_reports_various_source_when_spoofed():
+    """Kaynaklar sahteyse tekil bir kaynak uydurulmamalı."""
+    packets = [
+        _tcp(n, 1000.0 + n * 0.01, f"10.1.{n // 256}.{n % 256}", "10.0.0.9", 40000 + n, 443, "S")
+        for n in range(config.SYN_FLOOD_PACKET_THRESHOLD + 50)
+    ]
+
+    findings = [f for f in ThreatDetector().detect(packets) if f.rule_id == "SEC-SYN-FLOOD-001"]
+
+    assert len(findings) == 1
+    assert findings[0].source == "VARIOUS"
+    assert findings[0].evidence["distinct_source_count"] > 1
+
+
+def test_syn_flood_ignores_ordinary_connection_volume():
+    """Sıradan trafik hacmi flood sayılmamalı (eşik bilinçli olarak yüksek)."""
+    packets = []
+    packet_id = 0
+    for n in range(50):
+        src_port = 45000 + n
+        packet_id += 1
+        packets.append(_tcp(packet_id, 1000.0 + n * 0.2, "10.0.0.5", "10.0.0.9", src_port, 443, "S"))
+        packet_id += 1
+        packets.append(
+            _tcp(packet_id, 1000.0 + n * 0.2 + 0.01, "10.0.0.9", "10.0.0.5", 443, src_port, "SA")
+        )
+
+    findings = [f for f in ThreatDetector().detect(packets) if f.rule_id == "SEC-SYN-FLOOD-001"]
+
+    assert findings == []
+
+
 def test_connection_key_is_direction_independent():
     """Aynı bağlantının iki yönü aynı anahtarı üretmeli (düzeltmenin temeli)."""
     forward = _tcp(1, 1000.0, "10.0.0.5", "10.0.0.9", 40000, 443, "S")

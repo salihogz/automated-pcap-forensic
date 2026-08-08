@@ -161,7 +161,7 @@ The PDF is not a rendering of the HTML report — it is laid out for paper (A4, 
 
 ### The demo capture
 
-`samples/malicious/demo_capture.pcapng` is committed to the repository so the tool can be run immediately after cloning. It is **synthetic**: every address is from RFC 5737 (TEST-NET) or RFC 1918, so none of it can belong to a real host. It deliberately triggers 7 of the 8 detection rules, and also contains ordinary DNS/NTP response traffic as a regression guard against the port-scan false positive.
+`samples/malicious/demo_capture.pcapng` is committed to the repository so the tool can be run immediately after cloning. It is **synthetic**: every address is from RFC 5737 (TEST-NET) or RFC 1918, so none of it can belong to a real host. It deliberately triggers 7 of the 9 detection rules, and also contains ordinary DNS/NTP response traffic as a regression guard against the port-scan false positive.
 
 Regenerate it (deterministic — same bytes every run) with:
 
@@ -179,7 +179,7 @@ Any other capture you drop under `samples/` is gitignored, so your own traffic n
 - Streaming packet parsing (`PcapReader`, never `rdpcap`) — but see [the memory limitation](#known-limitation-memory-on-very-large-captures)
 - General traffic statistics
 - Protocol statistics
-- Rule-based threat detection (8 rules, see below)
+- Rule-based threat detection (9 rules, see below)
 - Threat Intelligence enrichment
     - VirusTotal
     - AbuseIPDB
@@ -197,7 +197,8 @@ Any other capture you drop under `samples/` is gitignored, so your own traffic n
 | Rule ID | Detects |
 | --- | --- |
 | `SEC-PORT-SCAN-001` | Many distinct destination ports contacted within a time window |
-| `SEC-SYN-SCAN-001` | TCP SYN scanning at the flag level |
+| `SEC-SYN-SCAN-001` | TCP SYN scanning at the flag level (one source → many ports) |
+| `SEC-SYN-FLOOD-001` | Volumetric TCP SYN flood against a single service (grouped by target, since flood sources are usually spoofed) |
 | `SEC-ICMP-FLOOD-001` | ICMP flooding |
 | `SEC-FAILED-TCP-001` | Bursts of TCP SYNs that were never answered by a SYN-ACK (RST-refused connections count as failed) |
 | `SEC-DNS-TUNNEL-001` | DNS tunneling (query volume/entropy per base domain) |
@@ -272,14 +273,14 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 
 - Parser
 - Statistics Engine
-- Threat Detection (8 rules)
+- Threat Detection (9 rules)
 - Threat Intelligence (3 providers)
 - HTML Reporter
 - JSON Export
 - CSV Export
 - PDF Export
 - Docker Support
-- Test suite (339 tests, 95% coverage)
+- Test suite (345 tests, 95% coverage)
 - Environment-based Configuration
 - Comprehensive Error Handling
 
@@ -303,7 +304,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 339 / 339 tests passing · **95%** total coverage (branch coverage enabled)
+**Current status:** 345 / 345 tests passing · **95%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |

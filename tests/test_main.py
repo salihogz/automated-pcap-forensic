@@ -564,7 +564,7 @@ def test_main_end_to_end_on_demo_capture(tmp_path: Path, monkeypatch):
     assert report.exists(), "rapor beklenen yola yazılmalı"
 
     html = report.read_text(encoding="utf-8")
-    # Demo capture 8 kuraldan 7'sini tetikliyor; rapor bunları içermeli.
+    # Demo capture 9 kuraldan 7'sini tetikliyor; rapor bunları içermeli.
     assert "SEC-PORT-SCAN-001" in html
     assert "SEC-DNS-TUNNEL-001" in html
     # Rapor tek dosya olmalı: dış kaynak referansı içermemeli.

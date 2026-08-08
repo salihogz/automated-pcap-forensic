@@ -26,7 +26,7 @@ import csv
 import json
 import logging
 from collections.abc import Iterable, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, Final
 
@@ -123,16 +123,24 @@ def _defuse_formula(value: Any) -> Any:
 
 
 def _epoch_to_iso(epoch: float | None) -> str:
-    """Epoch zamanı, saat dilimi ofseti taşıyan ISO 8601 metnine çevirir.
+    """Epoch zamanı UTC'de, ofset taşıyan ISO 8601 metnine çevirir.
 
     ``None`` ve parser'ın bozuk zaman damgası sentinel'i (``0.0``) boş hücreye
     çevrilir: 1970-01-01 yazmak, capture'da gerçekten o tarihte bir olay varmış
     izlenimi verir (bkz. statistics.py'deki aynı gerekçe).
+
+    UTC seçilmesi bilinçlidir: HTML ve PDF raporlar zaman damgalarını UTC
+    olarak basıyor (bkz. reporter._format_timestamp_value). CSV yerel saati
+    kullandığında aynı bulgu iki çıktıda farklı duvar saati gösteriyordu --
+    ofset yazıldığı için belirsizlik yoktu ama iki adli belgeyi yan yana
+    koyan analist için gereksiz bir uyuşmazlıktı. Ayrıca yerel saat, dosyayı
+    ÜRETEN makinenin saat dilimine bağlıdır: aynı capture farklı makinelerde
+    farklı CSV üretirdi.
     """
     if not epoch:
         return ""
     try:
-        return datetime.fromtimestamp(epoch).astimezone().isoformat()
+        return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
     except (OverflowError, OSError, ValueError):
         logger.warning("CSV: geçersiz zaman damgası biçimlendirilemedi: %r", epoch)
         return ""
