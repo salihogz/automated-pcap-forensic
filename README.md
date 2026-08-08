@@ -79,7 +79,7 @@ OTX_API_KEY=your_otx_key
 
 A provider with no key configured is **skipped**, not treated as an error — the tool runs fine with no `.env` at all, it just won't enrich IPs. Free tiers are enough to try it: VirusTotal gives 500 lookups/day, AbuseIPDB 1000 checks/day.
 
-Each provider has a **threshold** before its verdict counts as "malicious" (`config.py`: 3 VirusTotal engines, an AbuseIPDB confidence of 25, 3 OTX pulses). Without them, a single low-quality engine flagging a CDN address was enough to stamp it malicious — measured on a real capture of ordinary browsing, GitHub Pages and an AWS host were both reported as "MALICIOUS — all 3 providers agree" on the strength of 1–2 detections out of ~94 engines. The raw score is always reported regardless, so a below-threshold signal is still visible to the analyst; it just doesn't become a verdict.
+Each provider has a **threshold** before its verdict counts as malicious (`config.py`: 3 VirusTotal engines, AbuseIPDB confidence 25, 3 OTX pulses). One or two engines flagging a CDN address is routine noise, so without thresholds ordinary infrastructure gets stamped malicious. The raw score is always reported either way — a below-threshold signal stays visible, it just doesn't become a verdict.
 
 `.env` is gitignored; `.env.example` is the tracked template and must never contain a real key.
 
@@ -105,12 +105,12 @@ docker run --rm \
 
 Everything after the image name is passed straight to `main.py`, so all the flags above work unchanged.
 
-A few deliberate choices:
+Notes that affect how you run it:
 
-- **Captures are never baked into the image.** They are mounted at runtime, read-only. An image is a copyable, distributable object; evidence leaking into one means evidence multiplying outside your control. Only the synthetic demo capture ships inside, so `docker run` does something useful with no volumes at all.
-- **`.env` is never baked in either** — pass it at runtime with `--env-file`.
-- **The container runs as a non-root user** (`forensic`, UID 1000). The tool parses untrusted input (someone else's capture file), so a parser vulnerability shouldn't land on root. Use `--user "$(id -u):$(id -g)"` when your host UID isn't 1000, so files written to the mounted `reports/` belong to you.
-- **The container clock is UTC**, so log lines and report timestamps are UTC rather than your local time. The JSON/CSV exports carry an explicit offset (`+00:00`), so nothing is ambiguous — but it will differ from a host run.
+- **Captures are never baked into the image** — mount them read-only at runtime. Only the synthetic demo capture ships inside, so `docker run` works with no volumes at all.
+- **`.env` is never baked in either** — pass it with `--env-file`.
+- **The container runs as non-root** (`forensic`, UID 1000). If your host UID isn't 1000, add `--user "$(id -u):$(id -g)"` so files written to the mounted `reports/` belong to you.
+- **The container clock is UTC**, so timestamps differ from a host run. Exports carry an explicit offset, so nothing is ambiguous.
 
 ---
 
@@ -153,30 +153,24 @@ The HTML report is fully self-contained — charts are embedded as base64, so it
 | `csv` | `<capture>_findings.csv`, `<capture>_threat_intel.csv`, `<capture>_statistics.csv` | Excel/pivot tables, IOC lists, timeline tools |
 | `pdf` | `<capture>_report.pdf` | A printed/signed document for a case file |
 
-Two design rules run through all of them:
+**Machine formats carry raw data; human formats carry presentation.** JSON and CSV keep every finding as its own record with raw epoch timestamps. HTML and PDF collapse repeated detections of the same rule into one row and format times for reading — a grouped row can't be un-grouped, so the lossless representation is the one that gets exported.
 
-**Machine formats carry raw data; human formats carry presentation.** JSON and CSV keep every finding as its own record and every timestamp as a raw epoch value. The HTML and PDF reports collapse repeated detections of the same rule into one row and format times for reading. A grouped row can't be un-grouped, so the lossless representation is the one that gets exported.
+CSV is three files because a single CSV is one flat table and findings / threat-intel / statistics have three different shapes. The statistics file uses a long layout (`category,key,value`) so totals, distributions, top-N lists and the timeline share one schema.
 
 ### Threat Intelligence verdicts
 
-Each enriched IP gets one consensus verdict, derived in a single place (`reporter._prepare_threat_intel_for_template`) and reused by every output format, so the HTML report and the PDF can never disagree about the same address:
+Each enriched IP gets one consensus verdict, computed once and reused by every format, so the HTML report and the PDF can never disagree about the same address:
 
 | Label (as printed) | Meaning |
 | --- | --- |
 | `ZARARLI` | Malicious — every provider that answered crossed its threshold |
 | `ÇELİŞKİLİ` | Conflicting — some providers say malicious, others do not |
-| `ŞÜPHELİ` | Suspicious — nobody crossed a threshold, but at least one provider returned a **non-zero** score |
+| `ŞÜPHELİ` | Suspicious — nobody crossed a threshold, but at least one returned a **non-zero** score |
 | `KISMİ TEMİZ` | Partially clean — those that answered said clean, but some never answered |
 | `VERİ YOK` | No data — no provider could render a verdict |
 | `TEMİZ` | Clean — every provider answered and every score was zero |
 
-`ŞÜPHELİ` exists because thresholds created a state that would otherwise be mislabelled: all three providers answer, none crosses its threshold, but one returns 2/94 engines. Printing "clean — all providers agree" there would assert more than the data supports, since no provider actually said clean.
-
-**A provider that couldn't answer is never counted as "clean".** `is_malicious` is tri-state, and it stays tri-state in every format: `true` / `false` / `null` in JSON, `true` / `false` / `unknown` in CSV (never a blank cell, which reads as "false"), and "no verdict" in the PDF. The per-IP consensus is computed in one place (`reporter._prepare_threat_intel_for_template`) and reused by every format, so the HTML report and the PDF can't disagree about the same IP.
-
-CSV is split across three files because a single CSV is one flat table, and findings/threat-intel/statistics have three different shapes. The statistics file uses a long/tidy layout (`category,key,value`) so that scalar totals, protocol distributions, top-N lists and the timeline all fit one schema.
-
-The PDF is not a rendering of the HTML report — it is laid out for paper (A4, `Sayfa X / Y` footers so a missing page is detectable) and embeds DejaVu Sans, because ReportLab's built-in Helvetica has no `ğ ş ı İ` and would corrupt every Turkish label. The font ships with matplotlib, which is already a dependency, so the PDF needs no font assets of its own.
+**A provider that couldn't answer is never counted as clean.** `is_malicious` is tri-state and stays tri-state everywhere: `true`/`false`/`null` in JSON, `true`/`false`/`unknown` in CSV (never a blank cell, which reads as "false"), "no verdict" in the PDF.
 
 ### The demo capture
 
@@ -307,8 +301,8 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 
 ### Remaining
 
-- **Additional detection rules** — open-ended by nature. A detection rule set is never "finished"; the 8 shipped rules are a baseline, and the architecture (a threshold pair in `config.py` + a private `_detect_*` method) is built so a new rule doesn't touch the existing ones.
-- **Chunked processing for very large captures** — deliberately deferred rather than rushed, because getting the window overlap or the deduplication wrong would produce *silent false negatives*, the worst failure mode a forensic tool can have. The current memory behaviour is measured and documented in [Known Limitation](#known-limitation-memory-on-very-large-captures); analysis is never refused, only warned about.
+- **Additional detection rules** — open-ended by nature; a rule set is never "finished". The 9 shipped rules are a baseline, and the architecture (a threshold pair in `config.py` + a private `_detect_*` method) lets a new rule land without touching the existing ones.
+- **Chunked processing for very large captures** — deliberately deferred, because getting the window overlap or deduplication wrong produces *silent false negatives*, the worst failure mode a forensic tool can have. See [Known Limitation](#known-limitation-memory-on-very-large-captures); analysis is never refused, only warned about.
 
 ---
 
