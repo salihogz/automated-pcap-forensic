@@ -242,7 +242,7 @@ Automated-PCAP-Forensic/
 ├── reports/                 # generated reports & exports (gitignored)
 ├── samples/                 # captures (gitignored, except the synthetic demo)
 ├── scripts/                 # generate_sample_capture.py
-├── docs/                    # README screenshots
+├── docs/                    # ARCHITECTURE.md + README screenshots
 ├── logs/                    # analysis.log (gitignored)
 ├── .github/workflows/       # CI: ruff + pip-audit + pytest + docker build on every push
 ├── Dockerfile               # multi-stage build, non-root runtime
@@ -275,6 +275,8 @@ ThreatIntelService.enrich()  →  dict[str, list[NormalizedIOCResult]]   (parall
 ```
 
 The export formats all consume one `ExportPayload`, built once per run. That is what guarantees the SHA-256 of a multi-gigabyte capture is computed a single time instead of once per output, and that every format reports the same risk score.
+
+Design decisions — what each module owns, which behaviours must not be "simplified" away, and the concrete failure each one prevents — are documented in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 Data contracts live in `modules/models.py` and are shared across every stage. `PacketInfo` and `ThreatFinding` are frozen dataclasses — treated as immutable for chain-of-custody/data-integrity reasons.
 
