@@ -13,6 +13,7 @@ sonunda demo capture ile gerçek bir uçtan uca test bulunur.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -21,7 +22,8 @@ import pytest
 
 import config
 import main as main_module
-from modules.models import GeneralStatistics
+from modules.exporters import ExportError, ExportPayload
+from modules.models import GeneralStatistics, ThreatFinding, ThreatSeverity
 
 # ======================================================================
 # _is_public_ip
@@ -363,11 +365,26 @@ def test_main_verbose_prints_packet_and_finding_details(tmp_path: Path, monkeypa
     monkeypatch.setattr("sys.argv", ["main.py", "-f", str(capture), "-v"])
     monkeypatch.setattr(config, "LOGS_DIR", tmp_path)
 
-    with _PipelinePatches(packets=[_packet("10.0.0.1", "10.0.0.2")], findings=["BULGU-X"]):
+    # Bulgu artık gerçek bir ThreatFinding olmalı: main() sonuçları export
+    # katmanına da veriyor ve risk özeti `finding.severity` üzerinden
+    # hesaplanıyor. Düz bir string ("BULGU-X") yalnızca `print()` çağrısını
+    # taşıdığı için eskiden yetiyordu; artık boru hattının gerçek veri
+    # sözleşmesini temsil etmiyor.
+    finding = ThreatFinding(
+        rule_id="BULGU-X",
+        title="Test bulgusu",
+        severity=ThreatSeverity.LOW,
+        description="Verbose çıktı testi için üretilmiş bulgu.",
+        evidence={},
+        source="10.0.0.1",
+    )
+
+    with _PipelinePatches(packets=[_packet("10.0.0.1", "10.0.0.2")], findings=[finding]):
         exit_code = main_module.main()
 
     out = capsys.readouterr().out
     assert exit_code == 0
+    assert "BULGU-X" in out
     assert "THREAT INTELLIGENCE" in out
     assert "İLK 3 PAKET" in out
     assert "THREAT FINDINGS" in out
@@ -375,6 +392,143 @@ def test_main_verbose_prints_packet_and_finding_details(tmp_path: Path, monkeypa
     for handler in logging.getLogger().handlers[:]:
         handler.close()
         logging.getLogger().removeHandler(handler)
+
+
+# ======================================================================
+# Çıktı biçimleri (--format)
+# ======================================================================
+
+
+def test_parse_arguments_defaults_to_html_only(monkeypatch):
+    """Bayrak verilmeyen çağrılar eskisi gibi davranmalı (geriye uyumluluk)."""
+    monkeypatch.setattr("sys.argv", ["main.py"])
+
+    assert main_module.parse_arguments().format == ["html"]
+
+
+def test_parse_arguments_accepts_multiple_formats(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["main.py", "--format", "json", "pdf"])
+
+    assert main_module.parse_arguments().format == ["json", "pdf"]
+
+
+def test_parse_arguments_rejects_unknown_format(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["main.py", "--format", "docx"])
+
+    with pytest.raises(SystemExit):
+        main_module.parse_arguments()
+
+
+def test_resolve_export_formats_expands_all_keyword():
+    assert main_module.resolve_export_formats(["all"]) == ["html", "json", "csv", "pdf"]
+
+
+def test_resolve_export_formats_uses_canonical_order_not_user_order():
+    """HTML her zaman önce üretilmeli: sonraki adımlardan biri patlarsa bile
+    analistin elinde en kapsamlı çıktı bulunsun."""
+    assert main_module.resolve_export_formats(["pdf", "html", "json"]) == ["html", "json", "pdf"]
+
+
+def test_resolve_export_formats_deduplicates():
+    assert main_module.resolve_export_formats(["json", "json"]) == ["json"]
+
+
+def _payload_for(tmp_path: Path) -> ExportPayload:
+    capture = tmp_path / "clean" / "x.pcapng"
+    capture.parent.mkdir(parents=True, exist_ok=True)
+    capture.touch()
+    return ExportPayload.build(
+        statistics=_empty_stats(),
+        findings=[],
+        threat_intel={},
+        source_file=capture,
+        analysis_duration=0.0,
+    )
+
+
+def test_run_exporters_skips_html_format(tmp_path: Path, monkeypatch):
+    """HTML'i Reporter üretir; export döngüsü ona dokunmamalı."""
+    monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
+
+    written, failed = main_module.run_exporters(_payload_for(tmp_path), ["html"])
+
+    assert written == []
+    assert failed == []
+
+
+def test_run_exporters_continues_after_a_format_fails(tmp_path: Path, monkeypatch, caplog):
+    """Bir biçimin patlaması diğerlerinin çıktısını kaybettirmemeli."""
+    monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
+
+    class _BrokenExporter:
+        name = "pdf"
+
+        def export(self, *_args, **_kwargs):
+            raise ExportError("sahte PDF hatası")
+
+    monkeypatch.setitem(main_module.EXPORTERS, "pdf", _BrokenExporter)
+
+    with caplog.at_level(logging.ERROR):
+        written, failed = main_module.run_exporters(_payload_for(tmp_path), ["json", "pdf", "csv"])
+
+    assert failed == ["pdf"]
+    # JSON (1 dosya) + CSV (3 dosya) yine de üretilmiş olmalı.
+    assert len(written) == 4
+    assert "sahte PDF hatası" in caplog.text
+
+
+def test_main_writes_requested_exports_next_to_html_report(tmp_path: Path, monkeypatch):
+    capture = tmp_path / "malicious" / "ok.pcapng"
+    capture.parent.mkdir(parents=True)
+    capture.touch()
+    monkeypatch.setattr("sys.argv", ["main.py", "-f", str(capture), "--format", "html", "json"])
+    monkeypatch.setattr(config, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
+
+    with _PipelinePatches():
+        exit_code = main_module.main()
+
+    assert exit_code == 0
+    assert (tmp_path / "reports" / "malicious" / "ok_report.json").exists()
+
+
+def test_main_passes_precomputed_sha256_to_reporter(tmp_path: Path, monkeypatch):
+    """Delil dosyası iki kez hash'lenmemeli: aynı özet rapora da geçmeli."""
+    capture = tmp_path / "clean" / "ok.pcapng"
+    capture.parent.mkdir(parents=True)
+    capture.write_bytes(b"VERI")
+    monkeypatch.setattr("sys.argv", ["main.py", "-f", str(capture)])
+    monkeypatch.setattr(config, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
+
+    with _PipelinePatches() as pipeline:
+        main_module.main()
+
+    passed_sha = pipeline.reporter.generate.call_args.kwargs["sha256"]
+    assert passed_sha == hashlib.sha256(b"VERI").hexdigest()
+
+
+def test_main_returns_one_when_an_export_format_fails(tmp_path: Path, monkeypatch):
+    """Kısmi başarı sessizce "başarılı" sayılmamalı."""
+    capture = tmp_path / "clean" / "ok.pcapng"
+    capture.parent.mkdir(parents=True)
+    capture.touch()
+    monkeypatch.setattr("sys.argv", ["main.py", "-f", str(capture), "--format", "json"])
+    monkeypatch.setattr(config, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
+
+    class _BrokenExporter:
+        name = "json"
+
+        def export(self, *_args, **_kwargs):
+            raise ExportError("sahte JSON hatası")
+
+    monkeypatch.setitem(main_module.EXPORTERS, "json", _BrokenExporter)
+
+    with _PipelinePatches():
+        exit_code = main_module.main()
+
+    assert exit_code == 1
 
 
 # ======================================================================

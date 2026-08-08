@@ -6,6 +6,7 @@ import argparse
 import ipaddress
 import logging
 import sys
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import perf_counter
@@ -14,6 +15,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import config
+from modules.exporters import EXPORTERS, ExportError, ExportPayload
+from modules.output_paths import resolve_output_dir
 from modules.parser import PCAPParser
 from modules.reporter import Reporter
 from modules.statistics import build_general_statistics
@@ -26,6 +29,13 @@ from modules.threat_intel import (
 )
 
 logger = logging.getLogger(__name__)
+
+# `--format` seçeneğinin kabul ettiği değerler. "html" listenin başındadır ve
+# varsayılandır: araç bugüne kadar HTML raporu üretiyordu, bayrak verilmeyen
+# çağrılar aynı şekilde davranmaya devam etmelidir (geriye uyumluluk).
+HTML_FORMAT = "html"
+ALL_FORMATS_KEYWORD = "all"
+SUPPORTED_FORMATS: tuple[str, ...] = (HTML_FORMAT, *EXPORTERS)
 
 # Paralel Threat Intelligence sorgusu için üst sınır. Sağlayıcıların ücretsiz
 # katmanları oran sınırlıdır (ör. VirusTotal: dakikada 4 istek); worker sayısını
@@ -92,7 +102,55 @@ def parse_arguments() -> argparse.Namespace:
     arg_parser = argparse.ArgumentParser(description="PCAP/PCAPNG adli analiz aracı.")
     arg_parser.add_argument("-f", "--file", type=Path, help="Analiz edilecek PCAP dosya yolu")
     arg_parser.add_argument("-v", "--verbose", action="store_true", help="Debug seviyesinde loglama")
+    arg_parser.add_argument(
+        "--format",
+        nargs="+",
+        choices=[*SUPPORTED_FORMATS, ALL_FORMATS_KEYWORD],
+        default=[HTML_FORMAT],
+        metavar="BİÇİM",
+        help=(
+            "Üretilecek çıktı biçimleri (birden fazla verilebilir): "
+            f"{', '.join(SUPPORTED_FORMATS)} veya '{ALL_FORMATS_KEYWORD}'. Varsayılan: {HTML_FORMAT}"
+        ),
+    )
     return arg_parser.parse_args()
+
+
+def resolve_export_formats(requested: Sequence[str]) -> list[str]:
+    """`--format` değerlerini, tekrarları ayıklanmış kanonik sıraya çevirir.
+
+    Sıra `SUPPORTED_FORMATS`'tan gelir, kullanıcının yazdığı sıradan değil:
+    HTML raporunun önce üretilmesi, uzun süren PDF/CSV adımlarından biri
+    beklenmedik bir şekilde başarısız olsa bile analistin elinde en kapsamlı
+    çıktının bulunmasını sağlar.
+    """
+    if ALL_FORMATS_KEYWORD in requested:
+        return list(SUPPORTED_FORMATS)
+    return [fmt for fmt in SUPPORTED_FORMATS if fmt in set(requested)]
+
+
+def run_exporters(payload: ExportPayload, formats: Sequence[str]) -> tuple[list[Path], list[str]]:
+    """İstenen export biçimlerini çalıştırır; (yazılan dosyalar, başarısız biçimler) döndürür.
+
+    Bir biçimin başarısız olması diğerlerini DURDURMAZ: PDF üretimi (ör.
+    reportlab kurulu değilse) patladığında, aynı analizden üretilen JSON ve
+    CSV çıktılarının da kaybedilmesi için hiçbir sebep yoktur. Başarısızlıklar
+    yine de sessizce yutulmaz -- çağırana bildirilir ve çıkış kodunu etkiler.
+    """
+    output_dir = resolve_output_dir(payload.source_file)
+    written: list[Path] = []
+    failed: list[str] = []
+
+    for format_name in formats:
+        if format_name == HTML_FORMAT:
+            continue  # HTML, Reporter tarafından ayrıca üretiliyor.
+        try:
+            written.extend(EXPORTERS[format_name]().export(payload, output_dir))
+        except ExportError as exc:
+            logger.error("%s export'u başarısız oldu: %s", format_name.upper(), exc)
+            failed.append(format_name)
+
+    return written, failed
 
 
 def resolve_target_path(args: argparse.Namespace) -> Path | None:
@@ -202,15 +260,34 @@ def main() -> int:
                         f"Score={result.raw_score}"
                     )
 
-        # 5. HTML Report Generation
-        report_path = reporter.generate(
+        # 5. Report / Export Generation
+        export_formats = resolve_export_formats(args.format)
+
+        # Payload biçimlerden ÖNCE kurulur: SHA-256 özetini bir kez hesaplar ve
+        # aynı değeri hem HTML raporuna hem de export'lara verir. Aksi halde
+        # GB boyutundaki bir delil dosyası her çıktı için baştan sona okunurdu.
+        payload = ExportPayload.build(
             statistics=stats,
             findings=findings,
             threat_intel=threat_intel_results,
             source_file=target_path,
             analysis_duration=duration,
         )
-        logger.info("HTML raporu oluşturuldu: %s", report_path)
+
+        if HTML_FORMAT in export_formats:
+            report_path = reporter.generate(
+                statistics=stats,
+                findings=findings,
+                threat_intel=threat_intel_results,
+                source_file=target_path,
+                analysis_duration=duration,
+                sha256=payload.sha256,
+            )
+            logger.info("HTML raporu oluşturuldu: %s", report_path)
+
+        exported_paths, failed_formats = run_exporters(payload, export_formats)
+        for exported_path in exported_paths:
+            logger.info("Export oluşturuldu: %s", exported_path)
 
         logger.info(
             "İşlem %.2f saniyede tamamlandı. Ayrıştırılan paket sayısı: %d",
@@ -232,6 +309,16 @@ def main() -> int:
             print("\n--- THREAT FINDINGS ---")
             for finding in findings:
                 print(finding)
+
+        # Kısmi başarı sessizce "başarılı" sayılmaz: analistin ya da bir
+        # betiğin, istediği çıktılardan birinin üretilmediğini çıkış kodundan
+        # anlayabilmesi gerekir. Üretilebilen çıktılar yine de yerinde kalır.
+        if failed_formats:
+            logger.error(
+                "Şu export biçimleri üretilemedi: %s. Diğer çıktılar oluşturuldu.",
+                ", ".join(failed_formats),
+            )
+            return 1
 
         return 0
 

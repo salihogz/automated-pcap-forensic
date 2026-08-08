@@ -4,5 +4,6 @@
 pytest==9.1.1           # Test runner
 pytest-cov==7.1.0       # Coverage plugin (pytest --cov=modules --cov=main)
 beautifulsoup4==4.15.0  # DOM assertions on the generated HTML report (tests only)
+pypdf==6.15.0           # Text extraction from the generated PDF export (tests only)
 ruff==0.16.0            # Linter + formatter
 pip-audit==2.10.1       # Bağımlılıklarda bilinen zafiyet taraması (CI'da çalışır)

@@ -6,6 +6,8 @@
 scapy==2.7.0            # PcapReader streaming parser, packet layer access
 requests==2.34.2        # Threat-intel provider HTTP calls
 urllib3==2.7.0          # Retry policy for the shared requests.Session
-matplotlib==3.11.1      # Report charts (Agg backend, no GUI)
+matplotlib==3.11.1      # Report charts (Agg backend, no GUI); also supplies the
+                        # DejaVu Sans TTF embedded in the PDF export
 Jinja2==3.1.6           # HTML report template rendering
 python-dotenv==1.2.2    # Loads API keys from .env
+reportlab==5.0.0        # PDF export (pure Python, no system libraries needed)
