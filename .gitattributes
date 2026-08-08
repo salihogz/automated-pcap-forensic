@@ -1,0 +1,19 @@
+# Metin dosyaları depoda daima LF ile saklanır; checkout sırasında platformun
+# yerel biçimine çevrilir. Windows'tan klonlayan biri katkı verdiğinde tüm
+# dosyanın CRLF'e dönüp diff'i anlamsız hale getirmesini engeller.
+* text=auto eol=lf
+
+# Capture dosyaları ikili: satır sonu dönüşümü uygulanırsa dosya BOZULUR ve
+# SHA-256 chain-of-custody özeti değişir. Depoda tek bir capture izleniyor
+# (sentetik demo), ama kural gelecekte eklenecekler için de geçerli olsun.
+*.pcap  binary
+*.pcapng binary
+
+# Görseller ve derlenmiş çıktılar da dokunulmadan saklanır.
+*.png binary
+*.pdf binary
+
+# GitHub'ın dil istatistiği: test paketi ve şablon, projenin "ne hakkında"
+# olduğunu temsil etmiyor; dil çubuğunu Python lehine dürüst tutar.
+tests/** linguist-vendored
+templates/*.j2 linguist-language=HTML

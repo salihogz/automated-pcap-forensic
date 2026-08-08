@@ -339,7 +339,7 @@ def compute_risk_summary(findings: Sequence[ThreatFinding]) -> RiskSummary:
 # içine zaman damgası koyarsa, anahtarını buraya eklemesi yeterlidir.
 #
 # NOT: `first_seen_epoch`/`last_seen_epoch`, threat_detector.py'deki
-# kuralların (port/syn scan, ICMP flood, failed-TCP, DNS tunneling,
+# kuralların (port/syn scan, SYN flood, ICMP flood, failed-TCP, DNS tunneling,
 # exfiltration) fiilen ürettiği anahtarlardır. `ilk_gorulme`/`son_gorulme`
 # ise yalnızca `_group_recurring_findings()`'in tekrarlanan bulguları
 # birleştirirken ürettiği anahtarlardır (bkz. o fonksiyon).
@@ -482,9 +482,8 @@ def _with_hostname(ip_or_endpoint: str | None, hostname_map: dict[str, str]) -> 
 def _format_bytes(num_bytes: float) -> str:
     """Byte cinsinden bir değeri KB/MB/GB gibi okunabilir birime çevirir.
 
-    Döngü son birimde ("TB") her koşulda döndüğü için fonksiyonun sonuna
-    ayrıca bir dönüş satırı gerekmez; bir zamanlar orada duran satır
-    erişilemez ölü koddu.
+    Döngü "TB" biriminde her koşulda döner; sondaki `raise` yalnızca bu
+    değişmezi belgeler, çalışma zamanında erişilmez.
     """
     value = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -630,6 +629,13 @@ def _prepare_threat_intel_for_template(
         answered = [r for r in results if r.is_malicious is not None]
         malicious = [r for r in answered if r.is_malicious is True]
         unanswered = total - len(answered)
+        # Eşiği aşmadığı için "zararlı" denmeyen, ama sıfır da olmayan skorlar.
+        # Bkz. aşağıdaki "ŞÜPHELİ" dalı.
+        sub_threshold = [
+            r
+            for r in answered
+            if r.is_malicious is False and r.raw_score is not None and r.raw_score > 0
+        ]
 
         if not answered:
             label, css = "VERİ YOK", "INFO"
@@ -640,6 +646,24 @@ def _prepare_threat_intel_for_template(
         elif malicious:
             label, css = "ÇELİŞKİLİ", "HIGH"
             detail = f"Yanıt veren {len(answered)} sağlayıcıdan {len(malicious)} tanesi zararlı dedi."
+        elif sub_threshold:
+            # Hiçbir sağlayıcı eşiği aşmadı ama en az biri SIFIR OLMAYAN bir
+            # sinyal döndürdü (ör. VirusTotal'de 2 motor, AbuseIPDB'de 24).
+            # Bunu "TEMİZ" yazmak, "3 sağlayıcının tamamı temiz dedi" gibi
+            # veriyi AŞAN bir iddia olurdu: hiçbiri temiz demedi, hepsi zayıf
+            # bir olumlu sinyal verdi. Eşikler (config.py) yanlış pozitifleri
+            # elemek için var, kanıtı yok saymak için değil.
+            label, css = "ŞÜPHELİ", "MEDIUM"
+            signals = ", ".join(
+                f"{r.source}: {r.raw_score}"
+                for r in answered
+                if r.raw_score is not None and r.raw_score > 0
+            )
+            detail = (
+                f"Hiçbir sağlayıcı zararlı hükmü verecek eşiği aşmadı, ancak sıfır "
+                f"olmayan sinyal var ({signals}). Eşik altı kaldığı için hüküm "
+                f"verilmedi; ham skorlar aşağıdadır."
+            )
         elif unanswered:
             label, css = "KISMİ TEMİZ", "MEDIUM"
             detail = (
@@ -982,7 +1006,7 @@ class ChartBuilder:
 
         `title`/`color` parametreleri, aynı grafiğin TCP ve UDP port dağılımı
         için ayrı ayrı (ve görsel olarak birbirinden ayırt edilebilir şekilde)
-        üretilebilmesi içindir; verilmezse eski davranış korunur.
+        üretilebilmesi içindir; verilmezse başlık ve renk varsayılana düşer.
         """
         if not ports:
             return None, []
@@ -1100,7 +1124,6 @@ def build_chart_sections(
     """
     charts: list[ChartSection] = []
 
-    # 1. Protokol Dağılımı
     img, table = chart_builder.protocol_distribution_chart(
         statistics.protocol_distribution
     )
@@ -1122,7 +1145,6 @@ def build_chart_sections(
             )
         )
 
-    # 2. Katman Bazlı Protokol Dağılımı
     # Protokol grafiğinin hemen ardında: o grafik her paketi yalnızca en
     # üst katmanıyla sayar, bu grafik ise üç katmanın her birini ayrı ayrı
     # gösterir (bkz. ChartBuilder.layered_protocol_chart).
@@ -1149,7 +1171,6 @@ def build_chart_sections(
             )
         )
 
-    # 3. Top Talkers
     img, table = chart_builder.top_hosts_chart(
         statistics.top_source_ips,
         "En Aktif Hostlar (Top Talkers)",
@@ -1168,7 +1189,6 @@ def build_chart_sections(
             )
         )
 
-    # 3. Top Bandwidth Hosts
     img, table = chart_builder.top_hosts_chart(
         statistics.top_bandwidth_hosts,
         "En Yüksek Bant Genişliği Kullananlar",
@@ -1188,7 +1208,6 @@ def build_chart_sections(
             )
         )
 
-    # 4. TCP Port Dağılımı
     img, table = chart_builder.port_distribution_chart(
         dict(statistics.top_tcp_ports),
         title=f"TCP Port Dağılımı (İlk {config.TOP_N_PORTS})",
@@ -1205,7 +1224,6 @@ def build_chart_sections(
             )
         )
 
-    # 5. UDP Port Dağılımı
     # `top_udp_ports` istatistik motorunda hesaplanıyordu ama rapora hiç
     # girmiyordu: DNS, DHCP, NTP ve günümüzde web trafiğinin büyük
     # bölümünü taşıyan QUIC/HTTP3 UDP üzerinde koşar, dolayısıyla yalnızca
@@ -1231,7 +1249,6 @@ def build_chart_sections(
             )
         )
 
-    # 6. Zaman Çizelgesi
     img, table = chart_builder.timeline_chart(statistics.timeline)
     if img:
         charts.append(

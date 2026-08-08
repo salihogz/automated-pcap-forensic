@@ -137,18 +137,36 @@ _SEVERITY_COLORS: Final[dict[str, str]] = {
     "INFO": "#0369a1",
 }
 
+# Risk özetindeki `risk_class` KÜÇÜK harflidir ("critical", "high", ... --
+# HTML'de CSS sınıf adı olarak kullanılıyor) ve ayrıca `_SEVERITY_COLORS`'ta
+# karşılığı olmayan bir "clean" değeri alabilir. Doğrudan `_SEVERITY_COLORS`
+# ile aramak bu yüzden HER ZAMAN varsayılana düşüyordu: PDF'teki "Risk
+# Seviyesi" satırı, KRİTİK bir capture'da bile nötr gri basılıyordu.
+_RISK_CLASS_COLORS: Final[dict[str, str]] = {
+    "clean": "#15803d",
+    "low": "#15803d",
+    "medium": "#a16207",
+    "high": "#c2410c",
+    "critical": "#b91c1c",
+}
+
+_DEFAULT_TEXT_COLOR: Final[str] = "#0f172a"
+
 # TI uzlaşı etiketlerinin ciddiyet sırası: en kaygı verici satır en üstte.
 # "TEMİZ" en sonda çünkü uzun bir IP listesinde analistin ilk görmesi
 # gereken şey, temiz çıkan IP'ler değildir.
 _CONSENSUS_ORDER: Final[dict[str, int]] = {
     "ZARARLI": 0,
     "ÇELİŞKİLİ": 1,
-    "KISMİ TEMİZ": 2,
-    "VERİ YOK": 3,
-    "TEMİZ": 4,
+    # Eşik altı ama sıfır olmayan sinyal: "eksik veri"den daha kaygı vericidir,
+    # çünkü burada sağlayıcılar KONUŞTU, sadece eşiği aşmadı.
+    "ŞÜPHELİ": 2,
+    "KISMİ TEMİZ": 3,
+    "VERİ YOK": 4,
+    "TEMİZ": 5,
 }
 
-_PAGE_MARGIN: Final[float] = 15  # mm cinsinden; _build() içinde mm ile çarpılır
+_PAGE_MARGIN: Final[float] = 15  # mm cinsinden; export() ve _draw_footer() içinde mm ile çarpılır
 _MAX_CHART_HEIGHT_MM: Final[float] = 95.0
 
 
@@ -315,7 +333,7 @@ class PDFExporter(Exporter):
             )
         )
 
-        level_color = _SEVERITY_COLORS.get(summary.risk_class, "#0f172a")
+        level_color = _RISK_CLASS_COLORS.get(summary.risk_class, _DEFAULT_TEXT_COLOR)
         return [
             Paragraph("2. Risk Özeti", styles["heading"]),
             self._key_value_table(
@@ -428,12 +446,16 @@ class PDFExporter(Exporter):
         # Sabit oranı büyütmek de çözüm değil: her yeni kural kimliği daha
         # uzun olabilir ve sorun sessizce geri döner. Açıklama sütunu ise
         # doğal olarak sarılabildiği için daralmadan etkilenmez.
-        cell_style = styles["cell"]
+        cell_style, bold_style = styles["cell"], styles["cell_bold"]
+        # Önem etiketi hücrede <b> ile basıldığı için KALIN yüzle ölçülür.
         severity_width = self._measured_column_width(
-            [str(row["severity"].value) for row in rows], cell_style, width, max_ratio=0.16
+            [str(row["severity"].value) for row in rows],
+            bold_style, "Önem", bold_style, width, max_ratio=0.16,
         )
+        # Kural kimliği normal yüzle basılır, başlığı kalındır.
         rule_width = self._measured_column_width(
-            [str(row["rule_id"]) for row in rows], cell_style, width, max_ratio=0.32
+            [str(row["rule_id"]) for row in rows],
+            cell_style, "Kural", bold_style, width, max_ratio=0.32,
         )
         endpoint_width = width * 0.19
         time_width = width * 0.13
@@ -595,29 +617,45 @@ class PDFExporter(Exporter):
         )
         return table
 
-    # Hücre içeriğinin iki yanındaki dolgu (bkz. _data_table_style'daki
-    # LEFTPADDING/RIGHTPADDING varsayılanı 6pt) artı bir güvenlik payı.
-    _CELL_PADDING: ClassVar[float] = 14.0
+    # ReportLab'in gerçek hücre dolgusu 6+6 = 12pt'dir; 16 bunun üstünde küçük
+    # bir emniyet payı bırakır. 14 denenmişti ve yetmiyordu: yalnızca 2pt pay
+    # kalıyor, yazı tipi metrikleriyle satır kırma arasındaki yuvarlama farkı
+    # bunu yiyip metni yine kırıyordu.
+    _CELL_PADDING: ClassVar[float] = 16.0
 
     @staticmethod
     def _measured_column_width(
         values: list[str],
         style: ParagraphStyle,
+        header: str,
+        header_style: ParagraphStyle,
         available_width: float,
         *,
         max_ratio: float,
     ) -> float:
         """Bölünemez metinleri tek satırda taşıyacak sütun genişliğini ölçer.
 
+        ÖLÇÜM YAZI TİPİ, BASIM YAZI TİPİYLE AYNI OLMALI: hücre içeriği `<b>`
+        ile basılıyorsa normal yüzle ölçmek sütunu dar bırakır. Kalın yüz
+        %6-12 daha geniştir ve bu fark tam da bölünmeye yol açar -- ölçüldü:
+        "CRITICAL" normalde 34,00pt, kalın 38,06pt; normalle ölçülen sütunun
+        içerik alanı 36,00pt olduğu için etiket "CRITICA" + "L" diye
+        kırılıyordu. Başlık satırı da ölçüme dahildir; aksi halde yalnızca
+        kısa değerler içeren bir tabloda ("LOW") sütun, "Önem" başlığının
+        kendisinden dar kalıyor ve başlık kırılıyordu.
+
         `max_ratio` bir emniyet sübabıdır: beklenmedik biçimde uzun bir değer
         (ör. bir gün 60 karakterlik bir kural kimliği) tabloyu tek sütunun
         ezmesine yol açmasın. Sınıra dayanıldığında ReportLab yine kırar --
         ama bu, tablonun tamamen bozulmasından iyidir.
         """
-        if not values:
-            return available_width * max_ratio
-        widest = max(pdfmetrics.stringWidth(v, style.fontName, style.fontSize) for v in values)
-        return min(widest + PDFExporter._CELL_PADDING, available_width * max_ratio)
+        widths = [
+            pdfmetrics.stringWidth(value, style.fontName, style.fontSize) for value in values
+        ]
+        widths.append(
+            pdfmetrics.stringWidth(header, header_style.fontName, header_style.fontSize)
+        )
+        return min(max(widths) + PDFExporter._CELL_PADDING, available_width * max_ratio)
 
     @staticmethod
     def _data_table_style() -> TableStyle:

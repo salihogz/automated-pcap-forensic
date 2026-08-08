@@ -670,6 +670,66 @@ def test_pdf_does_not_break_rule_ids_across_lines(
     assert long_rule_id in text, "kural kimliği bölünmeden görünmeli"
 
 
+@pytest.mark.parametrize("severity", list(ThreatSeverity))
+def test_pdf_does_not_break_severity_label_or_header(
+    severity: ThreatSeverity, statistics: GeneralStatistics, capture_file: Path, tmp_path: Path
+):
+    """REGRESYON: önem etiketi ve "Önem" başlığı kelime ortasından kırılmamalı.
+
+    İki ayrı ölçüm hatası vardı:
+      1. Hücre içeriği `<b>` ile KALIN basılıyor ama sütun NORMAL yüzle
+         ölçülüyordu. Kalın yüz %6-12 geniş: "CRITICAL" normalde 34,00pt,
+         kalın 38,06pt, sütunun içerik alanı ise 36,00pt -> "CRITICA" + "L".
+      2. Başlık satırı ölçüme hiç dahil değildi; yalnızca kısa etiketler
+         içeren bir tabloda ("LOW") sütun "Önem" başlığından dar kalıyor ve
+         başlığın kendisi kırılıyordu.
+
+    Her önem derecesi ayrı ayrı sınanır: hata yalnızca tablodaki EN GENİŞ
+    etikete bağlı olduğu için tek bir örnekle test etmek onu kaçırırdı.
+    """
+    finding = ThreatFinding(
+        rule_id="SEC-TEST-001",
+        title="Ölçüm testi",
+        severity=severity,
+        description="Sütun genişliği ölçümü.",
+        evidence={},
+        source="10.0.0.1",
+        timestamp=1609459200.0,
+    )
+    payload = ExportPayload.build(
+        statistics=statistics,
+        findings=[finding],
+        threat_intel={},
+        source_file=capture_file,
+        analysis_duration=0.0,
+    )
+
+    text = _pdf_text(PDFExporter().export(payload, tmp_path)[0])
+
+    assert severity.value in text, f"{severity.value} etiketi bölünmüş"
+    assert "Önem" in text, "sütun başlığı bölünmüş"
+
+
+@pytest.mark.parametrize("risk_class", ["clean", "low", "medium", "high", "critical"])
+def test_pdf_risk_class_colors_cover_every_band(risk_class: str):
+    """REGRESYON: risk seviyesi rengi varsayılana düşmemeli.
+
+    `risk_class` KÜÇÜK harflidir ("critical") ve ayrıca `_SEVERITY_COLORS`'ta
+    karşılığı olmayan bir "clean" değeri alabilir; doğrudan orada aramak, PDF'in
+    "Risk Seviyesi" satırını KRİTİK bir capture'da bile nötr gri bırakıyordu.
+    """
+    assert risk_class in pdf_mod._RISK_CLASS_COLORS
+
+
+def test_risk_summary_classes_all_have_pdf_colors():
+    """Eşik tablosuna yeni bir bant eklenirse rengi de eklenmiş olmalı."""
+    from modules import reporter as reporter_module
+
+    declared = {css for _threshold, _label, css in reporter_module._RISK_THRESHOLDS}
+
+    assert declared <= set(pdf_mod._RISK_CLASS_COLORS)
+
+
 def test_pdf_groups_recurring_findings(payload: ExportPayload, tmp_path: Path):
     """Aynı tespitin tekrarları tek satırda özetlenmeli (JSON/CSV'nin aksine)."""
     text = _pdf_text(PDFExporter().export(payload, tmp_path)[0])

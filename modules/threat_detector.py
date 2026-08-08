@@ -213,15 +213,16 @@ class ThreatDetector:
 
         `weight_fn` her paketin pencere toplamına ne kadar katkı yapacağını
         belirler; varsayılan `None` her paketi 1 olarak sayar (saf paket-sayım
-        taraması — ICMP flood, failed-TCP, DNS tunneling bu şekilde kullanır).
+        taraması — ICMP flood, SYN flood, failed-TCP ve DNS tunneling bu
+        şekilde kullanır).
         Exfiltration kuralı `weight_fn=lambda p: p.length` geçerek AYNI
         pencereleme mekanizmasını byte-toplamı taraması için yeniden kullanır
         (bkz. `_detect_exfiltration`) — mantığı iki kez yazmamak için.
 
         `right` işaretçisi tüm tarama boyunca yalnızca ileri gider ve hiçbir
         `left` adımında `left`'e sıfırlanmaz; bu yüzden toplam maliyet
-        O(N)'dir. (ICMP flood, failed-TCP, DNS tunneling kuralları arasında
-        paylaşılan bu döngünün eski, her-`left`-adımında-pencereyi-baştan-
+        O(N)'dir. (ICMP flood, SYN flood, failed-TCP, DNS tunneling kuralları
+        arasında paylaşılan bu döngünün eski, her-`left`-adımında-pencereyi-baştan-
         tarayan hali, tek bir zaman penceresinde binlerce paketin biriktiği
         yoğun trafikte O(N * pencere_boyutu)'ya -pratikte O(N^2)'ye-
         yaklaşıyordu.)
@@ -365,9 +366,6 @@ class ThreatDetector:
         pair_buckets: dict[tuple[str, str], list[PacketInfo]] = defaultdict(list)
 
         for pkt in packets:
-            # Yanıt trafiği (servis portu -> ephemeral port) taramaya değil,
-            # normal bir diyaloğun dönüş bacağına aittir; sayıma alınırsa
-            # her DNS/NTP/QUIC sunucusu "port tarayıcı" gibi görünür.
             if self._is_valid_transport_packet(pkt) and not self._is_probable_response_packet(pkt):
                 pair_buckets[(pkt.src_ip, pkt.dst_ip)].append(pkt)  # type: ignore[arg-type]
 

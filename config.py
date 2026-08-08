@@ -37,14 +37,8 @@ PORT_SCAN_PORT_THRESHOLD: int = 15
 # 32768-60999, IANA önerisi 49152-65535'tir; ikisini de kapsayacak şekilde
 # daha geniş (daha temkinli) olan alt sınır seçilmiştir.
 #
-# NEDEN GEREKLİ: Bir port taramasında paketler tarayıcının EPHEMERAL kaynak
-# portundan hedefin SERVİS portuna gider. Bunun tam TERSİ yön -yani servis
-# portundan ephemeral porta- neredeyse her zaman bir isteğe verilen
-# YANITTIR. Bu ayrım yapılmadığında, yerel DNS sunucusunun istemciye
-# gönderdiği sıradan cevaplar (53 -> 33615, 53 -> 38777, 53 -> 50922 ...)
-# "60 saniyede 23 farklı porta erişim" gibi görünür ve tamamen temiz bir
-# capture HIGH severity "Port Taraması" bulgusuyla KRİTİK risk seviyesine
-# çıkar (bkz. threat_detector._is_probable_response_packet).
+# Neden gerekli olduğu ve elediği yanlış-pozitif:
+# threat_detector._is_probable_response_packet docstring'i.
 EPHEMERAL_PORT_MIN: int = 32768
 
 # --------------------------------------------------------------------
@@ -95,18 +89,10 @@ DNS_TUNNEL_TIME_WINDOW_SECONDS: int = 60
 DNS_TUNNEL_QUERY_COUNT_THRESHOLD: int = 30
 DNS_TUNNEL_SUSPICIOUS_QTYPES: tuple[str, ...] = ("TXT", "NULL", "CNAME")
 
-# "Temel alan adı" (base_domain) çıkarımı normalde sondan iki etikettir
-# (örn. "sub.evil.com" -> "evil.com"). Ancak çok parçalı public suffix'lere
-# (ikinci seviye TLD) sahip alan adlarında ("sub.firma.com.tr",
-# "sub.firma.co.uk") sondan iki etiket yalnızca suffix'in kendisidir
-# ("com.tr", "co.uk"); bu durumda TÜM ".com.tr" alan adları aynı kovaya
-# düşer ve birbiriyle hiç ilgisi olmayan şirketlerin DNS trafiği
-# yanlışlıkla tek bir "domain" olarak gruplanır (bkz. threat_detector.py
-# _detect_dns_tunneling / _compute_base_domain). Bu liste, tam bir Public
-# Suffix List (PSL) değildir — internet bağlantısı gerektirmeyen,
-# offline çalışma gereksinimine uygun, en yaygın çok parçalı suffix'leri
-# kapsayan küçük, statik bir tablodur. Kapsanmayan bir suffix ile
-# karşılaşılırsa eski (sondan-iki-etiket) davranışa sessizce geri döner.
+# Çok parçalı public suffix'ler ("com.tr", "co.uk"). Tam bir Public Suffix
+# List DEĞİL; offline çalışabilmek için tutulan küçük, statik bir tablodur.
+# Neden gerekli ve kapsanmayan suffix'te ne olur:
+# threat_detector._compute_base_domain docstring'i.
 DNS_TUNNEL_MULTI_LABEL_SUFFIXES: frozenset[str] = frozenset({
     # Türkiye
     "com.tr", "gov.tr", "org.tr", "net.tr", "edu.tr", "web.tr", "info.tr", "gen.tr",
@@ -304,14 +290,8 @@ DNS_QTYPE_MAP = {
 UNKNOWN_PROTOCOL = "OTHER"
 DEFAULT_FLAGS = "NONE"
 
-# Eşik, sabit bir zaman penceresi İÇİNDE aşılması gereken byte miktarıdır
-# (bkz. threat_detector._detect_exfiltration). Bir pencere yok sayılırsa
-# (eski davranış) tüm capture boyunca biriken toplam byte eşikle
-# karşılaştırılır; bu da saatlerce süren normal bir indirme/video akışını
-# dahi CRITICAL olarak işaretler. 5 dakikalık pencere, "kısa sürede
-# yüksek hacim" olan gerçek sızdırma davranışını "yavaş ve sürekli" olan
-# sıradan trafikten ayırmaya yetecek kadar sıkı, yanlış-pozitifi
-# azaltacak kadar da geniştir.
+# Eşik, sabit bir zaman penceresi İÇİNDE aşılması gereken byte miktarıdır;
+# pencerenin neden şart olduğu: threat_detector._detect_exfiltration.
 EXFILTRATION_TIME_WINDOW_SECONDS: int = 300
 EXFILTRATION_THRESHOLD = 50 * 1024 * 1024
 LONG_DOMAIN_LENGTH = 50

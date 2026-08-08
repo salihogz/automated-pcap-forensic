@@ -74,10 +74,8 @@ def build_general_statistics(packets: Iterable[PacketInfo]) -> GeneralStatistics
         total_packets += 1
         total_bytes += packet.length
 
-        # epoch_time <= 0, parser'ın bozuk/okunamayan timestamp'ler
-        # için verdiği sentinel değerdir (bkz. parser.py). Böyle bir
-        # paket zaman bazlı hesaplara (first/last/duration/timeline)
-        # dahil edilmez; aksi halde tüm capture süresi anlamsızlaşır.
+        # Parser'ın bozuk timestamp sentinel'i (bkz. modül docstring'i,
+        # "Veri kalitesi notu").
         is_invalid_time = packet.epoch_time <= 0
 
         # --- Zaman sınırları ---
@@ -159,9 +157,7 @@ def build_general_statistics(packets: Iterable[PacketInfo]) -> GeneralStatistics
         first_packet_time=first_time,
         last_packet_time=last_time,
         capture_duration=round(last_time - first_time, 6) if has_valid_time_data else 0.0,
-        # NOT: Counter'lar burada dict()'e çevriliyor. GeneralStatistics
-        # alanları dict[str, int] bekliyor; ham Counter atarsak
-        # dataclasses.asdict() (to_dict()) veriyi bozar (bkz. modül docstring'i).
+        # dict()'e çevriliyor; gerekçe: GeneralStatistics docstring'i.
         protocol_distribution=dict(protocol_counter),
         network_protocol_distribution=dict(network_counter),
         transport_protocol_distribution=dict(transport_counter),

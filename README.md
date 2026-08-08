@@ -241,6 +241,7 @@ Automated-PCAP-Forensic/
 ├── pyproject.toml           # ruff / pytest / coverage configuration
 ├── requirements.txt         # runtime dependencies
 ├── requirements-dev.txt     # test & lint dependencies
+├── SECURITY.md             # threat model & vulnerability reporting
 ├── LICENSE
 └── README.md
 ```
@@ -282,7 +283,7 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 - CSV Export
 - PDF Export
 - Docker Support
-- Test suite (351 tests, 95% coverage)
+- Test suite (366 tests, 95% coverage)
 - Environment-based Configuration
 - Comprehensive Error Handling
 
@@ -306,7 +307,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 351 / 351 tests passing · **95%** total coverage (branch coverage enabled)
+**Current status:** 366 / 366 tests passing · **95%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
@@ -349,6 +350,12 @@ Measured on a 300k-packet capture with realistic IP diversity: **291 bytes per p
 Memory scales with *packet count*, not file size — a capture of small packets holds far more packets per MB. The spread is wide enough that a single number would mislead: a 1.3 GB capture of 5.7 KB packets measured **179 MB** peak RSS (0.14× the file size), while the same 1.3 GB made of minimum-size 64-byte packets would need roughly 5× the file size. Captures above 500 MB therefore log a warning giving that *range*, not one figure. The analysis is **not** refused, since refusing to process a large piece of evidence would be unacceptable in a forensic tool.
 
 The planned fix is chunked processing: every detection rule has a bounded time window (the largest is exfiltration's 300s), so the capture can be split into time slices with an overlap of at least that window, with findings deduplicated across the overlap. This is deferred rather than rushed — getting the overlap or deduplication wrong would produce *silent false negatives*, which is the worst possible failure mode for a forensic tool.
+
+---
+
+## Security
+
+The capture file is **untrusted input** — whoever's traffic is captured controls the domain names and packet contents that end up in the report, and the person at risk is the analyst who opens it. Two real attacks in that class have already been found and fixed (spreadsheet formula injection through a threat-intel tag, and a hostname that suppressed report generation entirely). See [SECURITY.md](SECURITY.md) for the threat model, the defences in place, and how to report a vulnerability.
 
 ---
 

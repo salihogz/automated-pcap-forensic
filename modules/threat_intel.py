@@ -6,13 +6,12 @@ sağlayıcısına (VirusTotal, AbuseIPDB, AlienVault OTX) sorgular,
 her sağlayıcının kendine özgü yanıt şemasını ortak bir veri modeline
 (``NormalizedIOCResult``) dönüştürür ve sonuçları liste halinde döndürür.
 
-Bu sürümün kapsamı SADECE enrichment ile sınırlıdır:
+Kapsam SADECE enrichment ile sınırlıdır:
 
     IP -> Provider sorguları -> Normalize edilmiş IOC sonuçları
 
-Bu modül; skor hesaplama, severity belirleme, ThreatFinding üretimi,
-raporlama veya main.py entegrasyonu YAPMAZ. Bu sorumluluklar
-kasıtlı olarak sonraki fazlara bırakılmıştır (YAGNI).
+Skorlama, severity ve IP başına uzlaşı (consensus) hesabı bu modülde
+YAPILMAZ; bilinçli olarak reporter.py'ye bırakılmıştır (SRP).
 
 API anahtarları yalnızca .env dosyasından okunur ve hiçbir koşulda
 loglanmaz. Tüm HTTP istekleri ``verify=True`` ile SSL doğrulamalı
@@ -70,9 +69,8 @@ class NormalizedIOCResult:
     Bu dataclass ``ThreatFinding`` ile karıştırılmamalıdır; ThreatFinding
     yerel trafik analizinden üretilen tehdit bulgularını temsil ederken,
     bu sınıf dış kaynaklı IOC (Indicator of Compromise) zenginleştirme
-    sonucunu temsil eder. Skorlama ve severity hesaplaması bu fazda
-    kasıtlı olarak yapılmaz; ``raw_score`` provider'a özgü ham değeri
-    olduğu gibi taşır.
+    sonucunu temsil eder. ``raw_score`` provider'a özgü ham değeri olduğu
+    gibi taşır (bkz. modül docstring'i).
 
     Attributes:
         source: Sonucu üreten provider adı (örn. "VirusTotal").
@@ -596,7 +594,6 @@ class ThreatIntelService:
         validated_ip = self._validate_ip(ip)
         ip_str = str(validated_ip)
 
-        # 4. İyileştirme: Önbellekte varsa doğrudan döndür (Mükerrer sorgu önleme)
         if ip_str in self._cache:
             logger.debug("Önbellekten döndürülüyor: %s", ip_str)
             return self._cache[ip_str]

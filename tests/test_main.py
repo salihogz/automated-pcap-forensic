@@ -592,3 +592,119 @@ def test_demo_capture_does_not_produce_port_scan_false_positive_from_dns():
 
     scan_sources = {f.source for f in findings if f.rule_id == "SEC-PORT-SCAN-001"}
     assert scan_sources == {"10.0.0.66"}, "yalnızca gerçek tarayıcı host bulgu üretmeli"
+
+
+# ======================================================================
+# Düşmanca capture -- güvenlik savunmalarının uçtan uca doğrulaması
+# ======================================================================
+
+
+def _write_hostile_capture(path: Path) -> None:
+    """Saldırgan kontrolündeki alan adlarını taşıyan gerçek bir PCAPNG yazar.
+
+    Capture DOSYASI güvenilmeyen girdidir: trafiği yakalanacak bir saldırgan
+    DNS sorgu adlarını belirleyebilir ve bu metin raporlara, CSV'ye ve PDF'e
+    akar. Birim testleri bu yolların her birini ayrı ayrı sınıyor; bu test ise
+    zinciri baştan sona, gerçek bir dosyayla çalıştırır -- ayrıştırıcıdan
+    çıktıya kadar hiçbir aşamanın bu girdide çökmediğini ve hiçbir yükün
+    aktif kalmadığını doğrular.
+    """
+    from scapy.all import DNS, DNSQR, DNSRR, IP, UDP, Ether, wrpcap
+
+    hostile_names = [
+        # matplotlib mathtext: ayrıştırılamayan "$...$" grafik üretimini
+        # çökertip raporun hiç oluşmamasına yol açıyordu.
+        "a$$b.example.com",
+        r"x$\frac{1}$y.example.com",
+        # Elektronik tablo formülü: CSV hücresinde etkisizleştirilmezse
+        # analistin Excel'inde çalışır.
+        '=HYPERLINK("http://evil","x").example.com',
+        "+cmd.example.com",
+        # HTML/XML işaretlemesi: kaçırılmazsa raporda XSS, PDF'te belge hatası.
+        "<script>alert(1)</script>.example.com",
+        "a&b<c>.example.com",
+    ]
+
+    packets = []
+    base_time = 1772355600.0
+    for index, name in enumerate(hostile_names):
+        query = (
+            Ether()
+            / IP(src="10.0.0.5", dst="10.0.0.53")
+            / UDP(sport=40000 + index, dport=53)
+            / DNS(rd=1, qd=DNSQR(qname=name))
+        )
+        query.time = base_time + index
+        packets.append(query)
+
+        # Yanıt, adı ip_hostname_map'e sokar -- grafik etiketlerine ulaşan yol.
+        response = (
+            Ether()
+            / IP(src="10.0.0.53", dst="10.0.0.5")
+            / UDP(sport=53, dport=40000 + index)
+            / DNS(
+                id=1, qr=1, qd=DNSQR(qname=name),
+                an=DNSRR(rrname=name, type="A", rdata=f"93.184.216.{34 + index}"),
+            )
+        )
+        response.time = base_time + index + 0.1
+        packets.append(response)
+
+    wrpcap(str(path), packets)
+
+
+def test_hostile_capture_produces_all_outputs_without_active_payloads(tmp_path: Path, monkeypatch):
+    """Düşmanca alan adları taşıyan gerçek bir capture dört biçimi de üretmeli.
+
+    Doğrulananlar:
+      1. Araç çökmüyor (mathtext yükü rapor üretimini engellemiyor).
+      2. HTML'de <script> kaçırılmış, ham gömülü değil.
+      3. CSV'de formülle başlayan hücre kalmamış, ama metin kanıtta duruyor.
+      4. PDF üretilmiş ve işaretleme karakterleri düz metin olarak okunabiliyor.
+    """
+    import csv as csv_module
+
+    capture = tmp_path / "clean" / "hostile.pcapng"
+    capture.parent.mkdir(parents=True)
+    _write_hostile_capture(capture)
+
+    monkeypatch.setattr("sys.argv", ["main.py", "-f", str(capture), "--format", "all"])
+    monkeypatch.setattr(config, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
+    unconfigured = MagicMock()
+    unconfigured.name = "FakeProvider"
+    unconfigured.is_configured.return_value = False
+    monkeypatch.setattr(main_module, "build_default_providers", lambda _s: [unconfigured])
+
+    exit_code = main_module.main()
+    assert exit_code == 0, "düşmanca girdi aracı çökertmemeli"
+
+    out = tmp_path / "reports" / "clean"
+    html = (out / "hostile_report.html").read_text(encoding="utf-8")
+    pdf_bytes = (out / "hostile_report.pdf").read_bytes()
+    with (out / "hostile_findings.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv_module.DictReader(handle))
+
+    assert (out / "hostile_report.json").exists()
+    assert pdf_bytes.startswith(b"%PDF")
+
+    # XSS: ham etiket gömülü olmamalı, kaçırılmış hâli bulunmalı.
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+
+    # CSV formül enjeksiyonu: hiçbir hücre formül tetikleyicisiyle başlamamalı.
+    triggers = ("=", "+", "-", "@", "\t", "\r")
+    offenders = [
+        (row["rule_id"], column, value)
+        for row in rows
+        for column, value in row.items()
+        if isinstance(value, str) and value.startswith(triggers)
+    ]
+    assert offenders == [], f"etkisizleştirilmemiş formül hücresi: {offenders}"
+
+    # Kanıt GİZLENMEMELİ: yük metni raporda hâlâ okunabilir olmalı.
+    assert any("HYPERLINK" in row["evidence_json"] for row in rows)
+
+    for handler in logging.getLogger().handlers[:]:
+        handler.close()
+        logging.getLogger().removeHandler(handler)

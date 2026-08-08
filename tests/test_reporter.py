@@ -1388,3 +1388,65 @@ def test_https_card_renders_both_transports(
 
     assert "TLS / QUIC (HTTPS)" in html
     assert "TLS (HTTPS)" not in html
+
+
+# ---------------------------------------------------------------------------
+# TI uzlaşısı: eşik altı sinyal
+# ---------------------------------------------------------------------------
+
+
+def _ioc(source: str, is_malicious: bool | None, raw_score):
+    return NormalizedIOCResult(
+        source=source,
+        ip="9.9.9.9",
+        is_malicious=is_malicious,
+        raw_score=raw_score,
+        categories=(),
+        last_seen=None,
+        queried_at=FIXED_TEST_NOW,
+        provider_error_code=None,
+        provider_error_message=None,
+        confidence=None,
+    )
+
+
+def test_consensus_flags_sub_threshold_signal_as_suspicious():
+    """REGRESYON: eşik altı ama SIFIR OLMAYAN skorlar "TEMİZ" sayılmamalı.
+
+    Sağlayıcı eşikleri (config.py) yanlış pozitifleri elemek için var, kanıtı
+    yok saymak için değil. VirusTotal'de 2 motor, AbuseIPDB'de 24 puan
+    döndüğünde hiçbiri eşiği aşmaz -- ama rapor "3 sağlayıcının tamamı yanıt
+    verdi ve temiz dedi" yazarsa veriyi AŞAN bir iddiada bulunmuş olur:
+    hiçbiri temiz demedi, hepsi zayıf bir olumlu sinyal verdi.
+    """
+    results = [
+        _ioc("VirusTotal", False, 2),
+        _ioc("AbuseIPDB", False, 24),
+        _ioc("AlienVault OTX", False, 0),
+    ]
+
+    summary = r._prepare_threat_intel_for_template({"9.9.9.9": results})[0]
+
+    assert summary.consensus_label == "ŞÜPHELİ"
+    assert summary.consensus_class == "MEDIUM"
+    # Ham skorlar gerekçede görünmeli -- analist kendi kararını verebilsin.
+    assert "VirusTotal: 2" in summary.consensus_detail
+    assert "AbuseIPDB: 24" in summary.consensus_detail
+
+
+def test_consensus_stays_clean_when_every_score_is_zero():
+    """Gerçekten sıfır olan skorlar "TEMİZ" olmaya devam etmeli."""
+    results = [_ioc(name, False, 0) for name in ("VirusTotal", "AbuseIPDB", "AlienVault OTX")]
+
+    summary = r._prepare_threat_intel_for_template({"9.9.9.9": results})[0]
+
+    assert summary.consensus_label == "TEMİZ"
+
+
+def test_malicious_verdict_still_outranks_sub_threshold_signal():
+    """Eşiği aşan bir hüküm varsa etiket ŞÜPHELİ değil ZARARLI/ÇELİŞKİLİ olmalı."""
+    results = [_ioc("VirusTotal", True, 9), _ioc("AbuseIPDB", False, 3)]
+
+    summary = r._prepare_threat_intel_for_template({"9.9.9.9": results})[0]
+
+    assert summary.consensus_label == "ÇELİŞKİLİ"
