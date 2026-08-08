@@ -488,8 +488,58 @@ class ThreatDetector:
         logger.info("ICMP Flood kuralı tamamlandı. %d bulgu üretildi.", len(findings))
         return findings
 
+    @staticmethod
+    def _connection_key(
+        packet: PacketInfo,
+    ) -> tuple[tuple[str, int], tuple[str, int]]:
+        """Bir TCP paketini, YÖNDEN BAĞIMSIZ bir bağlantı kimliğine indirger.
+
+        Aynı bağlantının iki yönü (istemci->sunucu SYN ve sunucu->istemci
+        SYN-ACK) aynı anahtarı üretmelidir; aksi halde bir SYN'in yanıtlanıp
+        yanıtlanmadığı anlaşılamaz. İki uç nokta sıralanarak kanonik hale
+        getirilir, böylece yön bilgisi anahtardan düşer.
+
+        `or ""` / `or 0`: None uç nokta değerleri karşılaştırmada TypeError
+        fırlatırdı. TCP paketlerinde portlar pratikte hep doludur; bu yalnızca
+        bozuk/kısmi bir pakette kuralın çökmemesini garanti eder.
+        """
+        endpoint_a = (packet.src_ip or "", packet.src_port or 0)
+        endpoint_b = (packet.dst_ip or "", packet.dst_port or 0)
+        return (endpoint_a, endpoint_b) if endpoint_a <= endpoint_b else (endpoint_b, endpoint_a)
+
+    @classmethod
+    def _collect_answered_connections(
+        cls, packets: list[PacketInfo]
+    ) -> set[tuple[tuple[str, int], tuple[str, int]]]:
+        """SYN-ACK ile yanıtlanmış bağlantıların kanonik anahtar kümesini üretir.
+
+        Yalnızca SYN-ACK "başarılı yanıt" sayılır. RST ile reddedilen bir
+        bağlantı bilinçli olarak BAŞARISIZ kabul edilir: port taramasının
+        tipik imzası tam olarak budur (SYN -> RST), ve bir analistin görmek
+        isteyeceği şey de odur.
+        """
+        answered: set[tuple[tuple[str, int], tuple[str, int]]] = set()
+        for packet in packets:
+            flags = packet.tcp_flags or ""
+            if packet.transport_protocol == "TCP" and "S" in flags and "A" in flags:
+                answered.add(cls._connection_key(packet))
+        return answered
+
     def _detect_failed_tcp_connections(self, packets: list[PacketInfo]) -> list[ThreatFinding]:
-        """Tamamlanamayan / başarısız TCP bağlantılarını tespit eder."""
+        """Yanıtlanmamış TCP bağlantı denemelerinin yoğunlaştığı pencereleri tespit eder.
+
+        "Başarısız" tanımı: gönderilmiş bir SYN'e capture'ın TAMAMI içinde
+        karşılık gelen bir SYN-ACK bulunmaması. RST ile reddedilenler de
+        başarısız sayılır -- SYN -> RST, port taramasının tipik imzasıdır.
+
+        Bir SYN ile ona ait SYN-ACK zıt yönlerde aktığı için eşleştirme,
+        IP çifti kovalarından bağımsız, yön duyarsız bir bağlantı anahtarı
+        üzerinden yapılır (bkz. `_connection_key`). Bu ayrımın atlanması
+        kuralın en ciddi yanlış-pozitif kaynağıydı: SYN-ACK hiçbir zaman
+        SYN'in kovasında olmadığı için her SYN yanıtsız sayılıyor ve aynı
+        hedefe 60 saniyede 20+ bağlantı açan sıradan bir istemci (tarayıcı,
+        yedekleme ajanı, API çağıran servis) MEDIUM bulgu üretiyordu.
+        """
         logger.info("Failed TCP Connections kuralı çalıştırılıyor...")
         findings: list[ThreatFinding] = []
 
@@ -510,25 +560,30 @@ class ThreatDetector:
             ):
                 ip_pair_buckets[(pkt.src_ip, pkt.dst_ip)].append(pkt)
 
+        # Yanıtlanmış bağlantılar, IP ÇİFTİ KOVALARINDAN BAĞIMSIZ olarak, tüm
+        # paketler üzerinden tek bir geçişte toplanır.
+        #
+        # NEDEN BÖYLE OLMAK ZORUNDA: Bir SYN istemciden sunucuya, ona karşılık
+        # gelen SYN-ACK ise sunucudan istemciye gider. Kovalar (src_ip, dst_ip)
+        # ile anahtarlandığı için bu iki paket FARKLI kovalara düşer; SYN-ACK
+        # aranırken yalnızca SYN'in kendi kovasına bakmak, orada hiçbir zaman
+        # SYN-ACK bulunmaması demekti. Sonuç: her SYN "yanıtsız" sayılıyordu ve
+        # kural, aynı hedefe 60 saniyede 20+ bağlantı açan HERHANGİ bir istemci
+        # için (sıradan bir tarayıcı, yedekleme istemcisi, API çağrısı yapan bir
+        # servis) MEDIUM bulgu üretiyordu. Doğrulandı: 25 paket alışverişi tam
+        # ve başarılı el sıkışma "25 adet başarısız TCP bağlantı denemesi"
+        # olarak raporlanıyordu.
+        answered_connections = self._collect_answered_connections(packets)
+
         for (src_ip, dst_ip), tcp_pkts in ip_pair_buckets.items():
-            # Tamamlanamayan SYN paketlerini belirle
-            syn_dict: dict[tuple[int, int], list[PacketInfo]] = defaultdict(list)
-            syn_ack_ports: set[tuple[int, int]] = set()
-
-            for pkt in tcp_pkts:
-                flags = pkt.tcp_flags or ""
-                key = (pkt.src_port or 0, pkt.dst_port or 0)
-                reverse_key = (pkt.dst_port or 0, pkt.src_port or 0)
-
-                if flags == "S":
-                    syn_dict[key].append(pkt)
-                elif "S" in flags and "A" in flags:
-                    syn_ack_ports.add(reverse_key)
-
-            failed_syn_pkts: list[PacketInfo] = []
-            for key, pkts in syn_dict.items():
-                if key not in syn_ack_ports:
-                    failed_syn_pkts.extend(pkts)
+            # Yalnızca saf SYN (el sıkışmanın ilk adımı) bir "deneme"dir;
+            # SYN-ACK zaten yanıtın kendisidir.
+            failed_syn_pkts = [
+                pkt
+                for pkt in tcp_pkts
+                if pkt.tcp_flags == "S"
+                and self._connection_key(pkt) not in answered_connections
+            ]
 
             if len(failed_syn_pkts) < threshold:
                 continue

@@ -177,7 +177,12 @@ def build_general_statistics(packets: Iterable[PacketInfo]) -> GeneralStatistics
 
 
 def _increment_port(counter: Counter[int], port: int | None) -> None:
-    """Port None değilse sayaca ekler (DNS/NTP gibi UNKNOWN portları filtreler)."""
+    """Port None değilse sayaca ekler.
+
+    None, paketin taşıma katmanında port kavramının bulunmadığı anlamına
+    gelir (ör. ICMP) ya da portun okunamadığını gösterir; sayaca 0 gibi
+    uydurma bir değerle girmesi "en çok kullanılan port" listesini bozardı.
+    """
     if port is not None:
         counter[port] += 1
 

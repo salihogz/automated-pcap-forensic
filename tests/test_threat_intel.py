@@ -17,6 +17,7 @@ Kapsam:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import FrozenInstanceError
 from datetime import UTC
 from json import JSONDecodeError
@@ -419,6 +420,25 @@ def test_service_enrich_skips_unconfigured_providers():
 
     assert len(results) == 1
     assert results[0].source == VirusTotalProvider.name
+
+
+def test_service_warns_once_per_unconfigured_provider(caplog):
+    """Anahtarsız sağlayıcı uyarısı IP başına değil, sağlayıcı başına bir kez basılmalı.
+
+    Uyarı `enrich()` içinde olduğu için her sorguda yeniden tetikleniyordu:
+    anahtarsız çalıştırılan, 100 genel IP içeren bir capture'da tek bir
+    sağlayıcı için 100 satır uyarı üretiliyor ve zaman aşımı/HTTP hatası
+    gibi GERÇEK uyarılar log içinde görünmez hale geliyordu.
+    """
+    unconfigured = AbuseIPDBProvider(_fake_session(), api_key=None)
+    service = ThreatIntelService([unconfigured])
+
+    with caplog.at_level(logging.WARNING):
+        for ip in ("1.2.3.4", "5.6.7.8", "9.10.11.12"):
+            service.enrich(ip)
+
+    warnings = [r for r in caplog.records if "yapılandırılmamış" in r.getMessage()]
+    assert len(warnings) == 1, f"3 IP sorgulandı, 1 uyarı bekleniyordu: {len(warnings)}"
 
 
 def test_service_enrich_aggregates_all_configured_providers():

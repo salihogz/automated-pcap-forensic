@@ -577,6 +577,17 @@ class ThreatIntelService:
             raise ValueError("ThreatIntelService en az bir provider gerektirir.")
         self._providers = providers
         self._cache: dict[str, list[NormalizedIOCResult]] = {}
+        # Anahtarı olmayan sağlayıcı için uyarı IP BAŞINA değil, sağlayıcı
+        # başına bir kez basılır. Uyarı `enrich()` içinde olduğu için her
+        # sorguda yeniden tetikleniyordu: anahtarsız çalıştırılan, 100 genel
+        # IP içeren bir capture'da üç sağlayıcı için 300 satır uyarı demekti
+        # ve gerçek uyarıları (zaman aşımı, HTTP hatası) log içinde
+        # görünmez hale getiriyordu.
+        #
+        # Küme `enrich()` gibi ThreadPoolExecutor altından çağrılır; `add`
+        # atomiktir ve olası tek yarış sonucu aynı uyarının iki kez basılması
+        # olduğundan kilit gerekmez (bkz. sınıf docstring'indeki aynı gerekçe).
+        self._unconfigured_warned: set[str] = set()
 
     def enrich(self, ip: str) -> list[NormalizedIOCResult]:
         """Verilen IP'yi tüm yapılandırılmış provider'lara sorgular (Cache destekli)."""
@@ -592,10 +603,13 @@ class ThreatIntelService:
 
         for provider in self._providers:
             if not provider.is_configured():
-                logger.warning(
-                    "[%s] API anahtarı yapılandırılmamış, atlanıyor.",
-                    provider.name,
-                )
+                if provider.name not in self._unconfigured_warned:
+                    self._unconfigured_warned.add(provider.name)
+                    logger.warning(
+                        "[%s] API anahtarı yapılandırılmamış, bu sağlayıcı tüm "
+                        "sorgularda atlanacak.",
+                        provider.name,
+                    )
                 continue
 
             try:

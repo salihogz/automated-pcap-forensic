@@ -95,6 +95,125 @@ def _make_scan_packet(epoch_time, src_ip, dst_ip, dst_port, transport="TCP", pac
     )
 
 
+# --- Failed TCP Connection Testleri ---
+
+
+def _tcp(packet_id, epoch_time, src_ip, dst_ip, src_port, dst_port, tcp_flags):
+    """Yön bilgisi önemli olan TCP testleri için paket üretici.
+
+    `_make_scan_packet` src_port'u sabitliyor; el sıkışmanın iki yönünü
+    eşleştirmek için kaynak portun da kontrol edilebilmesi gerekiyor.
+    """
+    return PacketInfo(
+        id=packet_id,
+        epoch_time=epoch_time,
+        src_ip=src_ip,
+        dst_ip=dst_ip,
+        is_ipv6=False,
+        network_protocol="IPv4",
+        transport_protocol="TCP",
+        application_protocol=None,
+        length=60,
+        src_port=src_port,
+        dst_port=dst_port,
+        tcp_flags=tcp_flags,
+    )
+
+
+def _failed_tcp_findings(packets):
+    return [f for f in ThreatDetector().detect(packets) if f.rule_id == "SEC-FAILED-TCP-001"]
+
+
+def test_failed_tcp_ignores_successful_handshakes():
+    """REGRESYON: SYN-ACK ile yanıtlanan bağlantılar "başarısız" sayılmamalı.
+
+    Paketler (src_ip, dst_ip) ile kovalanıyor; bir SYN istemciden sunucuya,
+    ona karşılık gelen SYN-ACK ise sunucudan istemciye gittiği için ikisi
+    FARKLI kovalara düşer. Kural eskiden SYN-ACK'i yalnızca SYN'in kendi
+    kovasında arıyordu ve orada hiçbir zaman bulamıyordu: her SYN yanıtsız
+    sayılıyordu. Sonuç, aynı hedefe 60 saniyede 20+ bağlantı açan HER
+    istemcinin (sıradan bir tarayıcı dahi) MEDIUM bulgu üretmesiydi.
+    """
+    packets = []
+    packet_id = 0
+    for n in range(25):
+        src_port = 40000 + n
+        packet_id += 1
+        packets.append(_tcp(packet_id, 1000.0 + n * 0.1, "10.0.0.5", "10.0.0.9", src_port, 443, "S"))
+        packet_id += 1
+        packets.append(
+            _tcp(packet_id, 1000.0 + n * 0.1 + 0.01, "10.0.0.9", "10.0.0.5", 443, src_port, "SA")
+        )
+
+    assert _failed_tcp_findings(packets) == []
+
+
+def test_failed_tcp_detects_unanswered_syns():
+    """Hiç yanıt almayan SYN'ler bulgu üretmeye devam etmeli."""
+    packets = [
+        _tcp(n, 1000.0 + n * 0.1, "10.0.0.5", "10.0.0.9", 40000 + n, n + 1, "S")
+        for n in range(25)
+    ]
+
+    findings = _failed_tcp_findings(packets)
+
+    assert len(findings) == 1
+    assert findings[0].evidence["failed_attempt_count"] == 25
+
+
+def test_failed_tcp_counts_rst_refused_connections_as_failed():
+    """SYN'e RST ile cevap verilmesi BAŞARISIZ sayılmalı — port taramasının imzası budur."""
+    packets = []
+    packet_id = 0
+    for n in range(25):
+        src_port = 40000 + n
+        packet_id += 1
+        packets.append(
+            _tcp(packet_id, 1000.0 + n * 0.1, "10.0.0.5", "10.0.0.9", src_port, n + 1, "S")
+        )
+        packet_id += 1
+        packets.append(
+            _tcp(packet_id, 1000.0 + n * 0.1 + 0.01, "10.0.0.9", "10.0.0.5", n + 1, src_port, "RA")
+        )
+
+    findings = _failed_tcp_findings(packets)
+
+    assert len(findings) == 1
+    assert findings[0].evidence["failed_attempt_count"] == 25
+
+
+def test_failed_tcp_counts_only_the_unanswered_subset():
+    """Başarılı ve başarısız denemeler karışıkken yalnızca yanıtsız olanlar sayılmalı."""
+    packets = []
+    packet_id = 0
+    for n in range(20):  # başarılı
+        src_port = 50000 + n
+        packet_id += 1
+        packets.append(_tcp(packet_id, 1000.0 + n * 0.1, "10.0.0.5", "10.0.0.9", src_port, 443, "S"))
+        packet_id += 1
+        packets.append(
+            _tcp(packet_id, 1000.0 + n * 0.1 + 0.01, "10.0.0.9", "10.0.0.5", 443, src_port, "SA")
+        )
+    for n in range(22):  # başarısız
+        packet_id += 1
+        packets.append(
+            _tcp(packet_id, 1010.0 + n * 0.1, "10.0.0.5", "10.0.0.9", 60000 + n, n + 1, "S")
+        )
+
+    findings = _failed_tcp_findings(packets)
+
+    assert len(findings) == 1
+    assert findings[0].evidence["failed_attempt_count"] == 22
+
+
+def test_connection_key_is_direction_independent():
+    """Aynı bağlantının iki yönü aynı anahtarı üretmeli (düzeltmenin temeli)."""
+    forward = _tcp(1, 1000.0, "10.0.0.5", "10.0.0.9", 40000, 443, "S")
+    backward = _tcp(2, 1000.1, "10.0.0.9", "10.0.0.5", 443, 40000, "SA")
+
+    assert ThreatDetector._connection_key(forward) == ThreatDetector._connection_key(backward)
+
+
 # --- Port Scan Detection Testleri ---
 
 def test_port_scan_detects_many_ports_in_short_window():
