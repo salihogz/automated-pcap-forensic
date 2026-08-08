@@ -633,6 +633,43 @@ def test_pdf_numbers_every_page_with_total(payload: ExportPayload, tmp_path: Pat
         assert f"Sayfa {page_number} / {total}" in text
 
 
+def test_pdf_does_not_break_rule_ids_across_lines(
+    statistics: GeneralStatistics, capture_file: Path, tmp_path: Path
+):
+    """REGRESYON: kural kimliği sütun içinde kelime ORTASINDAN kırılmamalı.
+
+    "Kural" sütunu sabit oranla boyutlandırıldığında, sığmayan bir kimliği
+    ReportLab ortadan kesiyordu: "SEC-LONG-DOMAIN-001" PDF'te
+    "SEC-LONG-DOMAIN-0" + "01" olarak basılıyordu. Veri kaybolmuyor ama adli
+    bir belgede kural kimliği aranamaz/kopyalanamaz hale geliyor ve okuyana
+    yazım hatası gibi görünüyor. Sütun artık ÖLÇÜLEREK boyutlandırılıyor.
+    """
+    long_rule_id = "SEC-VERY-LONG-RULE-IDENTIFIER-001"
+    findings = [
+        ThreatFinding(
+            rule_id=long_rule_id,
+            title="Uzun kimlikli kural",
+            severity=ThreatSeverity.LOW,
+            description="Sütun genişliği testi.",
+            evidence={},
+            source="10.0.0.1",
+            destination="10.0.0.2",
+            timestamp=1609459200.0,
+        )
+    ]
+    payload = ExportPayload.build(
+        statistics=statistics,
+        findings=findings,
+        threat_intel={},
+        source_file=capture_file,
+        analysis_duration=0.0,
+    )
+
+    text = _pdf_text(PDFExporter().export(payload, tmp_path)[0])
+
+    assert long_rule_id in text, "kural kimliği bölünmeden görünmeli"
+
+
 def test_pdf_groups_recurring_findings(payload: ExportPayload, tmp_path: Path):
     """Aynı tespitin tekrarları tek satırda özetlenmeli (JSON/CSV'nin aksine)."""
     text = _pdf_text(PDFExporter().export(payload, tmp_path)[0])

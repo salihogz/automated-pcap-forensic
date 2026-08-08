@@ -375,7 +375,9 @@ class VirusTotalProvider(ThreatIntelProvider):
             return NormalizedIOCResult(
                 source=self.name,
                 ip=ip_str,
-                is_malicious=malicious_count > 0,
+                # Eşik altındaki motor sayısı "zararlı" hükmü doğurmaz ama
+                # raw_score'da korunur; rapor "temiz (ham skor: 2)" yazar.
+                is_malicious=malicious_count >= config.VIRUSTOTAL_MALICIOUS_ENGINE_THRESHOLD,
                 raw_score=malicious_count,
                 categories=tuple(sorted(flagged_engines)),
                 last_seen=_parse_unix_timestamp(attributes.get("last_analysis_date")),
@@ -460,7 +462,7 @@ class AbuseIPDBProvider(ThreatIntelProvider):
             return NormalizedIOCResult(
                 source=self.name,
                 ip=ip_str,
-                is_malicious=abuse_score > 0,
+                is_malicious=abuse_score >= config.ABUSEIPDB_MALICIOUS_SCORE_THRESHOLD,
                 raw_score=abuse_score,
                 categories=categories,
                 last_seen=_parse_iso8601(data.get("lastReportedAt")),
@@ -534,7 +536,7 @@ class AlienVaultOTXProvider(ThreatIntelProvider):
             return NormalizedIOCResult(
                 source=self.name,
                 ip=ip_str,
-                is_malicious=pulse_count > 0,
+                is_malicious=pulse_count >= config.OTX_MALICIOUS_PULSE_THRESHOLD,
                 raw_score=pulse_count,
                 categories=categories,
                 last_seen=latest_seen,

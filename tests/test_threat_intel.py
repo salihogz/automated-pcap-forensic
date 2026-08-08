@@ -26,6 +26,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
+import config
 from modules import threat_intel as ti
 from modules.threat_intel import (
     AbuseIPDBProvider,
@@ -279,7 +280,7 @@ def test_abuseipdb_query_requests_verbose_and_extracts_categories():
 def test_alienvault_otx_query_success_with_pulses():
     payload = {
         "pulse_info": {
-            "count": 2,
+            "count": config.OTX_MALICIOUS_PULSE_THRESHOLD,
             "pulses": [
                 {"tags": ["botnet", "c2"], "modified": "2026-01-05T00:00:00Z"},
                 {"tags": ["scanner"], "created": "2026-01-01T00:00:00Z"},
@@ -293,9 +294,93 @@ def test_alienvault_otx_query_success_with_pulses():
 
     assert result.source == AlienVaultOTXProvider.name
     assert result.is_malicious is True
-    assert result.raw_score == 2
+    assert result.raw_score == config.OTX_MALICIOUS_PULSE_THRESHOLD
     assert set(result.categories) == {"botnet", "c2", "scanner"}
     assert result.last_seen is not None
+
+
+# ======================================================================
+# "ZARARLI" HÜKMÜ EŞİKLERİ
+# ======================================================================
+# Üç sağlayıcının da ölçütü eskiden "sıfırdan büyük"tü. Gerçek bir capture
+# üzerinde ölçüldü: GitHub Pages (185.199.111.153) raporda "ZARARLI -- yanıt
+# veren 3 sağlayıcının tamamı zararlı dedi" damgası alıyordu, çünkü
+# VirusTotal'de ~94 motordan 2'si işaretlemişti ve AbuseIPDB skoru 55'ti.
+# Tek bir düşük kaliteli motorun işaretini "zararlı" ilan etmek, adli raporda
+# "yanıt verememeyi temiz saymak" kadar zararlıdır.
+
+
+def test_virustotal_below_engine_threshold_is_not_malicious():
+    """1-2 motor, CDN adreslerinde rutin yanlış pozitiftir -- hüküm verilmemeli."""
+    below = config.VIRUSTOTAL_MALICIOUS_ENGINE_THRESHOLD - 1
+    payload = {
+        "data": {
+            "attributes": {
+                "last_analysis_stats": {"malicious": below, "suspicious": 0,
+                                        "harmless": 90, "undetected": 2},
+                "last_analysis_results": {
+                    f"Engine{n}": {"category": "malicious"} for n in range(below)
+                },
+            }
+        }
+    }
+    provider = VirusTotalProvider(_fake_session(_FakeResponse(json_data=payload)), api_key="k")
+
+    result = provider.query("1.2.3.4")
+
+    assert result.is_malicious is False
+    # Kanıt GİZLENMEZ: ham skor korunur, analist kendi kararını verebilir.
+    assert result.raw_score == below
+
+
+def test_virustotal_at_engine_threshold_is_malicious():
+    at = config.VIRUSTOTAL_MALICIOUS_ENGINE_THRESHOLD
+    payload = {
+        "data": {
+            "attributes": {
+                "last_analysis_stats": {"malicious": at, "suspicious": 0,
+                                        "harmless": 90, "undetected": 2},
+                "last_analysis_results": {
+                    f"Engine{n}": {"category": "malicious"} for n in range(at)
+                },
+            }
+        }
+    }
+    provider = VirusTotalProvider(_fake_session(_FakeResponse(json_data=payload)), api_key="k")
+
+    assert provider.query("1.2.3.4").is_malicious is True
+
+
+def test_abuseipdb_below_score_threshold_is_not_malicious():
+    """AbuseIPDB'nin kendi dokümantasyonu 25 altını düşük güven sayar."""
+    below = config.ABUSEIPDB_MALICIOUS_SCORE_THRESHOLD - 1
+    payload = {"data": {"abuseConfidenceScore": below}}
+    provider = AbuseIPDBProvider(_fake_session(_FakeResponse(json_data=payload)), api_key="k")
+
+    result = provider.query("1.2.3.4")
+
+    assert result.is_malicious is False
+    assert result.raw_score == below
+
+
+def test_abuseipdb_at_score_threshold_is_malicious():
+    at = config.ABUSEIPDB_MALICIOUS_SCORE_THRESHOLD
+    payload = {"data": {"abuseConfidenceScore": at}}
+    provider = AbuseIPDBProvider(_fake_session(_FakeResponse(json_data=payload)), api_key="k")
+
+    assert provider.query("1.2.3.4").is_malicious is True
+
+
+def test_otx_below_pulse_threshold_is_not_malicious():
+    """Pulse'lar araştırma derlemelerini de içerir; tek pulse kanıt değildir."""
+    below = config.OTX_MALICIOUS_PULSE_THRESHOLD - 1
+    payload = {"pulse_info": {"count": below, "pulses": [{"tags": ["research"]}]}}
+    provider = AlienVaultOTXProvider(_fake_session(_FakeResponse(json_data=payload)), api_key="k")
+
+    result = provider.query("1.2.3.4")
+
+    assert result.is_malicious is False
+    assert result.raw_score == below
 
 
 def test_alienvault_otx_query_success_no_pulses():

@@ -153,6 +153,39 @@ OTX_BASE_URL = "https://otx.alienvault.com/api/v1"
 ABUSEIPDB_MAX_AGE_DAYS = 90
 OTX_MAX_CATEGORY_COUNT = 20
 
+# --------------------------------------------------------------------
+# "Zararlı" hükmü için sağlayıcı eşikleri
+# --------------------------------------------------------------------
+# Bu eşikler daha önce yoktu; her sağlayıcı için ölçüt "sıfırdan büyük"tü.
+# Sonuç, gerçek bir capture üzerinde ölçüldü ve savunulamazdı: GitHub Pages
+# (185.199.111.153) ve sıradan bir AWS adresi, raporda "ZARARLI -- yanıt veren
+# 3 sağlayıcının tamamı zararlı dedi" damgası alıyordu. Ham veriye bakınca
+# VirusTotal'de ~94 motordan YALNIZCA 1-2'sinin işaretlediği, AbuseIPDB
+# skorunun 20/100 olduğu görülüyordu.
+#
+# Adli bir raporda bu, projenin baştan beri kaçındığı hatanın AYNADAKİ
+# görüntüsüdür: "yanıt verememeyi temiz saymak" ne kadar zararlıysa,
+# tek bir düşük kaliteli motorun işaretini "zararlı" ilan etmek de o kadar
+# zararlıdır -- analistin güvenini yanlış yöne yıkar ve gerçek bulguları
+# gürültüye boğar.
+#
+# HAM SKOR HER ZAMAN KORUNUR: eşiğin altında kalan bir sinyal raporda yine
+# görünür (ör. "temiz (ham skor: 2)"), yalnızca "zararlı" HÜKMÜ verilmez.
+# Karar analistindir; araç kanıtı gizlemez, sadece abartmaz.
+
+# VirusTotal: kaç antivirüs motorunun "malicious" dediği. 1-2 motor, özellikle
+# CDN ve paylaşımlı barındırma adreslerinde rutin yanlış pozitiftir.
+VIRUSTOTAL_MALICIOUS_ENGINE_THRESHOLD = 3
+
+# AbuseIPDB: 0-100 arası GÜVEN yüzdesi (rapor sayısı değil). AbuseIPDB'nin
+# kendi dokümantasyonu 25'in altındaki skorları düşük güven olarak niteler.
+ABUSEIPDB_MALICIOUS_SCORE_THRESHOLD = 25
+
+# OTX: IP'yi içeren pulse (topluluk raporu) sayısı. Pulse'lar araştırma
+# derlemelerini de içerir ("tüm Cloudflare aralıkları" gibi listeler),
+# dolayısıyla tek bir pulse zararlılık kanıtı değildir.
+OTX_MALICIOUS_PULSE_THRESHOLD = 3
+
 # AbuseIPDB'nin "reports[].categories" alanındaki sabit sayısal kategori
 # kodlarının insan tarafından okunabilir karşılıkları (bkz. AbuseIPDB API
 # dokümantasyonu / https://www.abuseipdb.com/categories). Bu liste

@@ -416,16 +416,32 @@ class PDFExporter(Exporter):
                 ]
             )
 
-        # Sütun genişlikleri sayfa genişliğinin ORANI olarak verilir (sabit mm
-        # değil): kenar boşluğu ya da sayfa boyutu değişirse tablo kendiliğinden
-        # uyar, sayfa dışına taşmaz.
+        # "Önem" ve "Kural" sütunları ÖLÇÜLEREK boyutlandırılır; kalan alan
+        # açıklamaya verilir.
+        #
+        # NEDEN SABİT ORAN YETMİYOR: bu iki sütunun içeriği bölünemez tek
+        # kelimelerdir (bir önem etiketi, bir kural kimliği). Sığmadıklarında
+        # ReportLab onları kelime ORTASINDAN kırar. Ölçüldü: sabit oranla
+        # "SEC-LONG-DOMAIN-001" PDF'te "SEC-LONG-DOMAIN-0" + "01" olarak
+        # basılıyordu -- veri kaybolmuyor ama kural kimliği aranamaz,
+        # kopyalanamaz ve okuyana yazım hatası gibi görünür hale geliyordu.
+        # Sabit oranı büyütmek de çözüm değil: her yeni kural kimliği daha
+        # uzun olabilir ve sorun sessizce geri döner. Açıklama sütunu ise
+        # doğal olarak sarılabildiği için daralmadan etkilenmez.
+        cell_style = styles["cell"]
+        severity_width = self._measured_column_width(
+            [str(row["severity"].value) for row in rows], cell_style, width, max_ratio=0.16
+        )
+        rule_width = self._measured_column_width(
+            [str(row["rule_id"]) for row in rows], cell_style, width, max_ratio=0.32
+        )
+        endpoint_width = width * 0.19
+        time_width = width * 0.13
+        detail_width = width - (severity_width + rule_width + endpoint_width + time_width)
+
         table = Table(
             table_data,
-            # Oranlar deneyle sabitlendi: "Önem" sütunu en uzun etiketi
-            # ("CRITICAL"), "Kural" sütunu en uzun kural kimliğini
-            # ("SEC-DNS-TUNNEL-001") tek satırda taşıyacak kadar geniş olmalı --
-            # aksi halde iki sütun da ortadan kırılıp okunaksız hale geliyordu.
-            colWidths=[width * ratio for ratio in (0.11, 0.19, 0.19, 0.13, 0.38)],
+            colWidths=[severity_width, rule_width, endpoint_width, time_width, detail_width],
             # repeatRows=1: tablo sayfa taştığında başlık satırı her yeni
             # sayfada yeniden basılır. Aksi halde ikinci sayfadan itibaren
             # hangi sütunun ne olduğu anlaşılamaz.
@@ -578,6 +594,30 @@ class PDFExporter(Exporter):
             )
         )
         return table
+
+    # Hücre içeriğinin iki yanındaki dolgu (bkz. _data_table_style'daki
+    # LEFTPADDING/RIGHTPADDING varsayılanı 6pt) artı bir güvenlik payı.
+    _CELL_PADDING: ClassVar[float] = 14.0
+
+    @staticmethod
+    def _measured_column_width(
+        values: list[str],
+        style: ParagraphStyle,
+        available_width: float,
+        *,
+        max_ratio: float,
+    ) -> float:
+        """Bölünemez metinleri tek satırda taşıyacak sütun genişliğini ölçer.
+
+        `max_ratio` bir emniyet sübabıdır: beklenmedik biçimde uzun bir değer
+        (ör. bir gün 60 karakterlik bir kural kimliği) tabloyu tek sütunun
+        ezmesine yol açmasın. Sınıra dayanıldığında ReportLab yine kırar --
+        ama bu, tablonun tamamen bozulmasından iyidir.
+        """
+        if not values:
+            return available_width * max_ratio
+        widest = max(pdfmetrics.stringWidth(v, style.fontName, style.fontSize) for v in values)
+        return min(widest + PDFExporter._CELL_PADDING, available_width * max_ratio)
 
     @staticmethod
     def _data_table_style() -> TableStyle:

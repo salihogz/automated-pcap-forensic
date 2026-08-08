@@ -77,6 +77,8 @@ OTX_API_KEY=your_otx_key
 
 A provider with no key configured is **skipped**, not treated as an error — the tool runs fine with no `.env` at all, it just won't enrich IPs. Free tiers are enough to try it: VirusTotal gives 500 lookups/day, AbuseIPDB 1000 checks/day.
 
+Each provider has a **threshold** before its verdict counts as "malicious" (`config.py`: 3 VirusTotal engines, an AbuseIPDB confidence of 25, 3 OTX pulses). Without them, a single low-quality engine flagging a CDN address was enough to stamp it malicious — measured on a real capture of ordinary browsing, GitHub Pages and an AWS host were both reported as "MALICIOUS — all 3 providers agree" on the strength of 1–2 detections out of ~94 engines. The raw score is always reported regardless, so a below-threshold signal is still visible to the analyst; it just doesn't become a verdict.
+
 `.env` is gitignored; `.env.example` is the tracked template and must never contain a real key.
 
 ### Docker
@@ -280,7 +282,7 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 - CSV Export
 - PDF Export
 - Docker Support
-- Test suite (345 tests, 95% coverage)
+- Test suite (351 tests, 95% coverage)
 - Environment-based Configuration
 - Comprehensive Error Handling
 
@@ -304,7 +306,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 345 / 345 tests passing · **95%** total coverage (branch coverage enabled)
+**Current status:** 351 / 351 tests passing · **95%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
