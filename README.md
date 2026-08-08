@@ -6,7 +6,7 @@
 
 > An automated PCAP/PCAPNG forensic analysis tool developed in Python for Digital Forensics & Incident Response (DFIR) and Network Security.
 
-> **Project Status:** ✅ Production-Ready (Core Features Completed)
+> **Project Status:** ✅ Production-Ready — roadmap ~97% complete ([what's left](#development-status))
 
 ---
 
@@ -38,11 +38,11 @@ python main.py -f samples/malicious/demo_capture.pcapng
 
 ## Overview
 
-This project automatically analyzes `.pcap` and `.pcapng` files and generates a forensic report containing network statistics, threat detection results, threat intelligence enrichment, and risk assessment.
+This project automatically analyzes `.pcap` and `.pcapng` files and generates a forensic report containing network statistics, threat detection results, threat intelligence enrichment, and risk assessment. Results can be produced as an offline HTML report, machine-readable JSON, spreadsheet-ready CSV, or a printable PDF, and the whole tool runs from a container.
 
 The primary goal of this project is to improve my Python, DFIR, and software engineering skills while building a production-oriented portfolio project.
 
-The core functionality of the project has been completed and is fully operational. Future development will focus on adding new detection techniques, export formats, and feature enhancements while preserving the existing architecture.
+The tool is complete and fully operational: **~97% of the planned roadmap is done** (see [Development Status](#development-status)). Future development focuses on adding new detection techniques while preserving the existing architecture.
 
 ---
 
@@ -266,26 +266,27 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 
 ## Development Status
 
+**Roadmap: ~97% complete.** Every capability the project set out to build is implemented, tested and running in CI. Two items remain, and neither is a gap left by accident — see below.
+
 ### Completed
 
 - Parser
 - Statistics Engine
-- Threat Detection
-- Threat Intelligence
+- Threat Detection (8 rules)
+- Threat Intelligence (3 providers)
 - HTML Reporter
 - JSON Export
 - CSV Export
 - PDF Export
-- Threat Intelligence Test Suite
+- Docker Support
+- Test suite (309 tests, 94% coverage)
 - Environment-based Configuration
 - Comprehensive Error Handling
 
-- Docker Support
+### Remaining
 
-### Planned
-
-- Additional Detection Rules
-- **Chunked processing for very large captures** — see below
+- **Additional detection rules** — open-ended by nature. A detection rule set is never "finished"; the 8 shipped rules are a baseline, and the architecture (a threshold pair in `config.py` + a private `_detect_*` method) is built so a new rule doesn't touch the existing ones.
+- **Chunked processing for very large captures** — deliberately deferred rather than rushed, because getting the window overlap or the deduplication wrong would produce *silent false negatives*, the worst failure mode a forensic tool can have. The current memory behaviour is measured and documented in [Known Limitation](#known-limitation-memory-on-very-large-captures); analysis is never refused, only warned about.
 
 ---
 
