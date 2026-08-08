@@ -199,7 +199,7 @@ Any other capture you drop under `samples/` is gitignored, so your own traffic n
 | `SEC-PORT-SCAN-001` | Many distinct destination ports contacted within a time window |
 | `SEC-SYN-SCAN-001` | TCP SYN scanning at the flag level |
 | `SEC-ICMP-FLOOD-001` | ICMP flooding |
-| `SEC-FAILED-TCP-001` | Bursts of failed TCP connection attempts |
+| `SEC-FAILED-TCP-001` | Bursts of TCP SYNs that were never answered by a SYN-ACK (RST-refused connections count as failed) |
 | `SEC-DNS-TUNNEL-001` | DNS tunneling (query volume/entropy per base domain) |
 | `SEC-LONG-DOMAIN-001` | Abnormally long domain names |
 | `SEC-DGA-001` | Algorithmically generated (DGA) domain names |
@@ -279,7 +279,7 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 - CSV Export
 - PDF Export
 - Docker Support
-- Test suite (309 tests, 94% coverage)
+- Test suite (339 tests, 95% coverage)
 - Environment-based Configuration
 - Comprehensive Error Handling
 
@@ -303,21 +303,21 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 309 / 309 tests passing · **94%** total coverage (branch coverage enabled)
+**Current status:** 339 / 339 tests passing · **95%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |
 | `config.py` | 100% |
 | `modules/exporters/base.py` | 100% |
 | `modules/output_paths.py` | 100% |
+| `modules/reporter.py` | 98% |
+| `modules/threat_detector.py` | 98% |
 | `main.py` | 97% |
-| `modules/reporter.py` | 97% |
-| `modules/threat_detector.py` | 97% |
 | `modules/exporters/pdf_exporter.py` | 95% |
 | `modules/models.py` | 94% |
 | `modules/statistics.py` | 94% |
+| `modules/exporters/csv_exporter.py` | 92% |
 | `modules/parser.py` | 92% |
-| `modules/exporters/csv_exporter.py` | 91% |
 | `modules/exporters/json_exporter.py` | 88% |
 | `modules/threat_intel.py` | 86% |
 
