@@ -283,7 +283,7 @@ Data contracts live in `modules/models.py` and are shared across every stage. `P
 - CSV Export
 - PDF Export
 - Docker Support
-- Test suite (366 tests, 95% coverage)
+- Test suite (368 tests, 95% coverage)
 - Environment-based Configuration
 - Comprehensive Error Handling
 
@@ -307,7 +307,7 @@ pip-audit                                           # dependency vulnerability s
 
 Ruff and pytest are configured in `pyproject.toml`. CI runs lint, a dependency vulnerability scan (`pip-audit`, covering transitive dependencies) and the test suite on every push.
 
-**Current status:** 366 / 366 tests passing · **95%** total coverage (branch coverage enabled)
+**Current status:** 368 / 368 tests passing · **95%** total coverage (branch coverage enabled)
 
 | Module | Coverage |
 | --- | --- |

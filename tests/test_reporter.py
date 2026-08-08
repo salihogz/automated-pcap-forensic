@@ -1450,3 +1450,32 @@ def test_malicious_verdict_still_outranks_sub_threshold_signal():
     summary = r._prepare_threat_intel_for_template({"9.9.9.9": results})[0]
 
     assert summary.consensus_label == "ÇELİŞKİLİ"
+
+
+def test_every_consensus_label_has_a_severity_rank():
+    """REGRESYON: uzlaşı etiketleri ile PDF sıralaması senkron kalmalı.
+
+    Sıra eskiden pdf_exporter içinde ayrı bir sözlükte elle tutuluyordu ve
+    uyuşmazlık SESSİZDİ: eşleşmeyen etiket `.get(label, 99)` ile en alta
+    düşüyordu. Yeni bir bant eklenip PDF tarafı unutulursa, o banttaki IP'ler
+    adli tablonun en altına -- TEMİZ satırlarının bile altına -- inerdi.
+    Bu test, sıralamanın etiketlerin üretildiği yerden türetildiğini kilitler.
+    """
+    from modules.exporters import pdf_exporter as pdf_mod
+
+    produced = {
+        r.CONSENSUS_MALICIOUS, r.CONSENSUS_CONFLICTING, r.CONSENSUS_SUSPICIOUS,
+        r.CONSENSUS_PARTIAL_CLEAN, r.CONSENSUS_NO_DATA, r.CONSENSUS_CLEAN,
+    }
+
+    assert produced == set(r.CONSENSUS_SEVERITY_ORDER)
+    assert produced == set(pdf_mod._CONSENSUS_ORDER)
+
+
+def test_consensus_order_puts_malicious_first_and_clean_last():
+    """Sıralama ciddiyet yönünde olmalı: analist en kaygı verici satırı ilk görsün."""
+    order = r.CONSENSUS_SEVERITY_ORDER
+
+    assert order[0] == r.CONSENSUS_MALICIOUS
+    assert order[-1] == r.CONSENSUS_CLEAN
+    assert order.index(r.CONSENSUS_SUSPICIOUS) < order.index(r.CONSENSUS_CLEAN)

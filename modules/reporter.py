@@ -601,6 +601,35 @@ class ThreatIntelSummary:
     consensus_detail: str
 
 
+# IP başına TI uzlaşı etiketleri ve CİDDİYET SIRASI (en kaygı vericiden en
+# masuma). Sıra burada, etiketlerin ÜRETİLDİĞİ yerde tanımlıdır.
+#
+# NEDEN: PDF export'u bu etiketlere göre sıralama yapıyor ve sırayı kendi
+# içinde ayrı bir sözlükte tutuyordu. İki liste elle senkron tutulmak
+# zorundaydı ve uyuşmazlık SESSİZDİ -- eşleşmeyen etiket `.get(label, 99)`
+# ile en alta düşüyordu. Yani yeni bir bant eklenip PDF tarafı güncellenmezse
+# (ki "ŞÜPHELİ" eklenirken tam bu risk yaşandı) o banttaki IP'ler, adli
+# tablonun analistin en az okuduğu yerine, TEMİZ satırlarının bile altına
+# sessizce inerdi. Tek tanım + bir test bu sınıfı ortadan kaldırır.
+CONSENSUS_MALICIOUS: Final[str] = "ZARARLI"
+CONSENSUS_CONFLICTING: Final[str] = "ÇELİŞKİLİ"
+CONSENSUS_SUSPICIOUS: Final[str] = "ŞÜPHELİ"
+CONSENSUS_PARTIAL_CLEAN: Final[str] = "KISMİ TEMİZ"
+CONSENSUS_NO_DATA: Final[str] = "VERİ YOK"
+CONSENSUS_CLEAN: Final[str] = "TEMİZ"
+
+#: Etiketler ciddiyet sırasına göre; tüketiciler (ör. PDF tablosu) sıralamayı
+#: bu demetten türetmeli, kendi kopyasını tutmamalıdır.
+CONSENSUS_SEVERITY_ORDER: Final[tuple[str, ...]] = (
+    CONSENSUS_MALICIOUS,
+    CONSENSUS_CONFLICTING,
+    CONSENSUS_SUSPICIOUS,
+    CONSENSUS_PARTIAL_CLEAN,
+    CONSENSUS_NO_DATA,
+    CONSENSUS_CLEAN,
+)
+
+
 def _prepare_threat_intel_for_template(
     threat_intel: dict[str, list[NormalizedIOCResult]],
 ) -> list[ThreatIntelSummary]:
@@ -638,13 +667,13 @@ def _prepare_threat_intel_for_template(
         ]
 
         if not answered:
-            label, css = "VERİ YOK", "INFO"
+            label, css = CONSENSUS_NO_DATA, "INFO"
             detail = f"Hiçbir sağlayıcı hüküm veremedi ({total} sağlayıcı denendi)."
         elif len(malicious) == len(answered):
-            label, css = "ZARARLI", "CRITICAL"
+            label, css = CONSENSUS_MALICIOUS, "CRITICAL"
             detail = f"Yanıt veren {len(answered)} sağlayıcının tamamı zararlı dedi."
         elif malicious:
-            label, css = "ÇELİŞKİLİ", "HIGH"
+            label, css = CONSENSUS_CONFLICTING, "HIGH"
             detail = f"Yanıt veren {len(answered)} sağlayıcıdan {len(malicious)} tanesi zararlı dedi."
         elif sub_threshold:
             # Hiçbir sağlayıcı eşiği aşmadı ama en az biri SIFIR OLMAYAN bir
@@ -653,7 +682,7 @@ def _prepare_threat_intel_for_template(
             # veriyi AŞAN bir iddia olurdu: hiçbiri temiz demedi, hepsi zayıf
             # bir olumlu sinyal verdi. Eşikler (config.py) yanlış pozitifleri
             # elemek için var, kanıtı yok saymak için değil.
-            label, css = "ŞÜPHELİ", "MEDIUM"
+            label, css = CONSENSUS_SUSPICIOUS, "MEDIUM"
             signals = ", ".join(
                 f"{r.source}: {r.raw_score}"
                 for r in answered
@@ -665,13 +694,13 @@ def _prepare_threat_intel_for_template(
                 f"verilmedi; ham skorlar aşağıdadır."
             )
         elif unanswered:
-            label, css = "KISMİ TEMİZ", "MEDIUM"
+            label, css = CONSENSUS_PARTIAL_CLEAN, "MEDIUM"
             detail = (
                 f"Yanıt veren {len(answered)} sağlayıcı temiz dedi, ancak {unanswered} "
                 f"sağlayıcı hüküm veremedi — sonuç eksiktir."
             )
         else:
-            label, css = "TEMİZ", "LOW"
+            label, css = CONSENSUS_CLEAN, "LOW"
             detail = f"{total} sağlayıcının tamamı yanıt verdi ve temiz dedi."
 
         summaries.append(

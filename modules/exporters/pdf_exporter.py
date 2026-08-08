@@ -34,6 +34,7 @@ import matplotlib
 from modules.exporters.base import Exporter, ExportError, ExportPayload
 from modules.reporter import (
     _SEVERITY_PRIORITY,
+    CONSENSUS_SEVERITY_ORDER,
     ChartBuilder,
     _group_recurring_findings,
     _prepare_findings_for_template,
@@ -152,18 +153,12 @@ _RISK_CLASS_COLORS: Final[dict[str, str]] = {
 
 _DEFAULT_TEXT_COLOR: Final[str] = "#0f172a"
 
-# TI uzlaşı etiketlerinin ciddiyet sırası: en kaygı verici satır en üstte.
-# "TEMİZ" en sonda çünkü uzun bir IP listesinde analistin ilk görmesi
-# gereken şey, temiz çıkan IP'ler değildir.
+# TI uzlaşı sıralaması, etiketlerin ÜRETİLDİĞİ yerden türetilir
+# (reporter.CONSENSUS_SEVERITY_ORDER). Buradaki sözlüğü elle tutmak, iki
+# listeyi senkron tutma yükü ve SESSİZ bir hata modu demekti: eşleşmeyen bir
+# etiket varsayılan sıraya düşüp adli tablonun en altına iniyordu.
 _CONSENSUS_ORDER: Final[dict[str, int]] = {
-    "ZARARLI": 0,
-    "ÇELİŞKİLİ": 1,
-    # Eşik altı ama sıfır olmayan sinyal: "eksik veri"den daha kaygı vericidir,
-    # çünkü burada sağlayıcılar KONUŞTU, sadece eşiği aşmadı.
-    "ŞÜPHELİ": 2,
-    "KISMİ TEMİZ": 3,
-    "VERİ YOK": 4,
-    "TEMİZ": 5,
+    label: index for index, label in enumerate(CONSENSUS_SEVERITY_ORDER)
 }
 
 _PAGE_MARGIN: Final[float] = 15  # mm cinsinden; export() ve _draw_footer() içinde mm ile çarpılır
