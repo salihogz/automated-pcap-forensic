@@ -61,6 +61,27 @@ from modules.threat_intel import NormalizedIOCResult
 
 logger = logging.getLogger(__name__)
 
+# GÜVENLİK: matplotlib, etiket metinlerindeki "$...$" çiftlerini varsayılan
+# olarak TeX matematik ifadesi (mathtext) sayıp ayrıştırır. Grafik etiketleri
+# capture'dan gelen -- yani SALDIRGANIN KONTROLÜNDEKİ -- hostname'leri içerir
+# (bkz. ip_hostname_map; DNS yanıtlarından türetilir). Ayrıştırılamayan bir
+# ifade ValueError fırlatır ve bu istisna ChartBuilder ile main() arasında
+# hiçbir yerde yakalanmaz: RAPOR HİÇ ÜRETİLEMEZ.
+#
+# Yani hedef ağda "a$$b.example.com" gibi bir alan adının çözümlenmesini
+# sağlayabilen bir saldırgan, kendi trafiğinin adli raporunun hiç
+# oluşturulmamasını sağlayabiliyordu -- delili yok etmeye yakın bir etki.
+# Doğrulanan payload'lar: "a$$b.com", "a$\frac{1}$b.com", "a$\nonexistentcmd$b.com".
+#
+# `text.parse_math=False` mathtext ayrıştırmasını tümüyle kapatır; "$" düz bir
+# karakter olarak basılır. Etiketleri tek tek kaçırmak yerine bunun seçilmesi
+# bilinçlidir: sonradan eklenen her grafik de kendiliğinden korunur.
+#
+# `matplotlib.use()`'un aksine bu ayarın import'lardan ÖNCE olması gerekmez --
+# rcParams render anında okunur -- bu yüzden import bloğunun altında duruyor
+# (E402: import'lar dosyanın başında kalsın).
+matplotlib.rcParams["text.parse_math"] = False
+
 _TEMPLATE_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "templates"
 _TEMPLATE_NAME: Final[str] = "report.html.j2"
 # Sürüm tek kaynaktan (config) okunur; rapordaki "Araç Sürümü" alanı adli bir
@@ -415,6 +436,15 @@ def _format_timestamp_value(value: Any) -> str:
     if isinstance(value, datetime):
         dt = value if value.tzinfo else value.replace(tzinfo=UTC)
         return dt.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    # Epoch 0, parser'ın OKUNAMAYAN zaman damgası için verdiği sentinel'dir
+    # (bkz. parser._parse_single_packet). Olduğu gibi biçimlendirilirse rapor
+    # "1970-01-01 00:00:00 UTC" yazar ve capture'da gerçekten o tarihte bir
+    # olay varmış izlenimi verir -- adli bir belgede uydurma bir tarih,
+    # eksik bir alandan daha zararlıdır. CSV export'u aynı değeri zaten boş
+    # hücreye çeviriyordu (bkz. csv_exporter._epoch_to_iso); bu kontrol iki
+    # çıktının aynı şeyi söylemesini sağlar.
+    if isinstance(value, (int, float)) and not value:
+        return "-"
     try:
         return datetime.fromtimestamp(float(value), tz=UTC).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
@@ -427,15 +457,23 @@ def _with_hostname(ip_or_endpoint: str | None, hostname_map: dict[str, str]) -> 
     """Bir IP (veya 'IP:port' biçimindeki endpoint) değerini, DNS'te
     görülmüş bir hostname varsa "IP (hostname)" biçiminde zenginleştirir.
 
-    Bulgu (finding) kaynak/hedef alanları bazen port içerdiğinden ('1.2.3.4:443'),
-    eşleşme önce ':' öncesindeki saf IP üzerinden aranır; port bilgisi
-    görüntüde korunur.
+    Önce değerin TAMAMI aranır, ancak sonra ':' öncesindeki parçaya bakılır.
+    Bu sıra IPv6 için zorunludur: bir IPv6 adresi (`2606:4700::1111`) baştan
+    sona iki nokta içerir, dolayısıyla yalnızca ':' öncesine bakan eski
+    davranış anahtarı `2606` sanıyor ve HİÇBİR IPv6 adresi için hostname
+    bulamıyordu -- DNS'in AAAA yanıtından hostname öğrenilmiş olsa bile.
+    Sonuç, aynı raporda IPv4 hostlarının "IP (hostname)", IPv6 hostlarının
+    ise yalnızca "IP" olarak görünmesiydi.
+
+    ':' öncesine düşülmesi, port taşıyan endpoint biçimi ('1.2.3.4:443')
+    içindir; port bilgisi görüntüde korunur.
     """
     if not ip_or_endpoint:
         return ip_or_endpoint
 
-    ip_part = ip_or_endpoint.split(":", 1)[0]
-    hostname = hostname_map.get(ip_part)
+    hostname = hostname_map.get(ip_or_endpoint) or hostname_map.get(
+        ip_or_endpoint.split(":", 1)[0]
+    )
     if not hostname:
         return ip_or_endpoint
     return f"{ip_or_endpoint} ({hostname})"

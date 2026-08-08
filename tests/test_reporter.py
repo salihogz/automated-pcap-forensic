@@ -362,6 +362,87 @@ class TestRiskSummaryAndChartBuilderUnits:
         chart_ids = [c.id for c in charts]
         assert chart_ids.count("udp_port_distribution") == 1
 
+    @pytest.mark.parametrize(
+        "hostile_hostname",
+        [
+            "a$$b.example.com",
+            r"a$\frac{1}$b.example.com",
+            r"a$\nonexistentcmd$b.example.com",
+        ],
+    )
+    def test_chart_survives_mathtext_payload_in_hostname(self, hostile_hostname: str):
+        """GÜVENLİK REGRESYONU: hostname'deki "$...$" raporu çökertmemeli.
+
+        matplotlib etiketlerdeki "$...$" çiftlerini varsayılan olarak TeX
+        matematik ifadesi sayıp ayrıştırır. Grafik etiketleri capture'dan
+        türetilen hostname'leri içerir (ip_hostname_map, DNS yanıtlarından
+        gelir), yani SALDIRGAN KONTROLÜNDEDİR. Ayrıştırılamayan bir ifade
+        ValueError fırlatıyor ve bu istisna ChartBuilder ile main() arasında
+        hiçbir yerde yakalanmıyordu: rapor hiç üretilemiyordu. Yani hedef
+        ağda böyle bir alan adının çözümlenmesini sağlayan saldırgan, kendi
+        trafiğinin adli raporunu yok edebiliyordu.
+
+        Koruma: reporter.py'de `text.parse_math=False`.
+        """
+        builder = r.ChartBuilder()
+
+        img, table = builder.top_hosts_chart(
+            [("1.2.3.4", 100)],
+            "Test",
+            "Paket Sayısı",
+            hostname_map={"1.2.3.4": hostile_hostname},
+        )
+
+        assert img, "grafik üretilmeli, istisna fırlatılmamalı"
+        # Kanıt korunmalı: hostname etikette olduğu gibi görünmeli.
+        assert hostile_hostname in table[0].label
+
+    def test_mathtext_parsing_is_disabled_globally(self):
+        """Koruma tek tek etiketlerde değil, modül seviyesinde olmalı.
+
+        Yeni eklenen her grafik kendiliğinden korunsun diye rcParam
+        kapatılıyor; bu ayar geri alınırsa yukarıdaki test bir gün yeni bir
+        grafik türü için sessizce geçersiz kalırdı.
+        """
+        assert matplotlib.rcParams["text.parse_math"] is False
+
+    def test_with_hostname_enriches_ipv6_addresses(self):
+        """REGRESYON: IPv6 adresleri de hostname ile zenginleştirilmeli.
+
+        Eski davranış anahtarı ':' öncesinden alıyordu; bir IPv6 adresi baştan
+        sona iki nokta içerdiği için anahtar "2606" sanılıyor ve DNS'in AAAA
+        yanıtından hostname öğrenilmiş olsa bile hiçbir IPv6 adresi
+        eşleşmiyordu. Aynı raporda IPv4 hostları "IP (hostname)", IPv6
+        hostları yalnızca "IP" olarak görünüyordu.
+        """
+        hostname_map = {"2606:4700::1111": "cloudflare.example"}
+
+        assert (
+            r._with_hostname("2606:4700::1111", hostname_map)
+            == "2606:4700::1111 (cloudflare.example)"
+        )
+
+    def test_with_hostname_still_handles_ipv4_endpoint_with_port(self):
+        """IPv6 düzeltmesi, port taşıyan IPv4 endpoint davranışını bozmamalı."""
+        hostname_map = {"1.2.3.4": "ipv4.example"}
+
+        assert r._with_hostname("1.2.3.4:443", hostname_map) == "1.2.3.4:443 (ipv4.example)"
+        assert r._with_hostname("1.2.3.4", hostname_map) == "1.2.3.4 (ipv4.example)"
+
+    @pytest.mark.parametrize("sentinel", [0, 0.0])
+    def test_broken_timestamp_sentinel_is_not_rendered_as_1970(self, sentinel):
+        """REGRESYON: epoch 0 sentinel'i rapora "1970-01-01" olarak yazılmamalı.
+
+        0, parser'ın OKUNAMAYAN zaman damgası için verdiği sentinel'dir.
+        Biçimlendirilince rapor capture'da gerçekten 1970'te bir olay varmış
+        gibi gösteriyordu; CSV export'u aynı değeri zaten boş bırakıyordu,
+        yani iki çıktı aynı veri için farklı şey söylüyordu.
+        """
+        assert r._format_timestamp_value(sentinel) == "-"
+
+    def test_valid_timestamp_still_formats(self):
+        assert r._format_timestamp_value(1772355720.0) == "2026-03-01 09:02:00 UTC"
+
     def test_chart_builder_individual_charts(self, populated_statistics: GeneralStatistics):
         """Tests individual chart building methods using stateless ChartBuilder and explicit parameters."""
         builder = r.ChartBuilder()

